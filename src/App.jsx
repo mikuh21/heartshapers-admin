@@ -600,42 +600,33 @@ function BookModal({ book, onClose, onSaved }) {
       let result;
 
       if (form.id) {
-        const { data: existingBook, error: existingError } = await supabase
-          .from("books")
-          .select("id")
-          .eq("id", form.id)
-          .maybeSingle();
-
-        if (existingError) {
-          console.error("Book lookup failed before update", {
-            message: existingError.message,
-            code: existingError.code,
-            details: existingError.details,
-            hint: existingError.hint
-          });
-          throw existingError;
-        }
-
-        if (!existingBook) {
-          console.error("Book update skipped because no row matched the selected id", {
-            bookId: form.id
-          });
-          throw new Error("Unable to update the book. Please try again.");
-        }
-
-        const { error } = await supabase
+        const { data: updatedBook, error } = await supabase
           .from("books")
           .update(payload)
-          .eq("id", form.id);
+          .eq("id", form.id)
+          .select("id")
+          .maybeSingle();
 
         if (error) {
           console.error("Book update failed", {
+            bookId: form.id,
             message: error.message,
             code: error.code,
             details: error.details,
             hint: error.hint
           });
+
           throw error;
+        }
+
+        if (!updatedBook) {
+          console.error("Book update affected no rows", {
+            bookId: form.id
+          });
+
+          throw new Error(
+            "The book could not be updated. Please check administrator permissions."
+          );
         }
 
         onSaved();
