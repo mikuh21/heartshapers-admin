@@ -2,6 +2,8 @@ import { supabase } from "./supabase";
 
 const ADMIN_USERS_FUNCTION =
   import.meta.env.VITE_ADMIN_USER_FUNCTION || "admin-user-management";
+const ADMIN_MANAGEMENT_FUNCTION =
+  import.meta.env.VITE_ADMIN_MANAGEMENT_FUNCTION || "admin-management";
 
 export const ADMIN_WEB_ALLOWED_ROLES = ["admin", "super_admin"];
 export const NORMAL_MOBILE_ROLE = "user";
@@ -119,4 +121,58 @@ export async function updateUserStatus(userId, disabled) {
   }
 
   return normalizeUser(data?.user || data || null);
+}
+
+export async function listAdmins() {
+  const { data, error } = await supabase.functions.invoke(ADMIN_MANAGEMENT_FUNCTION, {
+    body: { action: "list" }
+  });
+
+  if (error) {
+    throw new Error("Administrator management is unavailable right now.");
+  }
+
+  const admins = Array.isArray(data?.admins) ? data.admins : [];
+  return admins.map(normalizeUser);
+}
+
+export async function createAdmin({ full_name, email, password }) {
+  const { data, error } = await supabase.functions.invoke(ADMIN_MANAGEMENT_FUNCTION, {
+    body: {
+      action: "create",
+      full_name,
+      email,
+      password
+    }
+  });
+
+  if (error) {
+    throw new Error("Unable to create the administrator account. Please try again.");
+  }
+
+  if (data?.error) {
+    throw new Error(data.error || "Unable to create the administrator account. Please try again.");
+  }
+
+  return normalizeUser(data?.admin || data || null);
+}
+
+export async function updateAdminStatus(userId, disabled) {
+  const { data, error } = await supabase.functions.invoke(ADMIN_MANAGEMENT_FUNCTION, {
+    body: {
+      action: "update-status",
+      userId,
+      disabled
+    }
+  });
+
+  if (error) {
+    throw new Error("Unable to update this administrator account right now.");
+  }
+
+  if (data?.error) {
+    throw new Error(data.error || "Unable to update this administrator account right now.");
+  }
+
+  return normalizeUser(data?.admin || data || null);
 }

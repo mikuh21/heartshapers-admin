@@ -166,6 +166,33 @@ nav { display: grid; gap: 5px; }
 .search-box input {
   border: 0; outline: 0; padding: 10px 8px; width: 100%; color: #333;
 }
+.password-field {
+  position: relative;
+  display: flex;
+  align-items: center;
+}
+.password-field input {
+  padding-right: 42px;
+}
+.password-toggle {
+  position: absolute;
+  right: 8px;
+  top: 50%;
+  transform: translateY(-50%);
+  border: 0;
+  background: transparent;
+  color: #667085;
+  display: grid;
+  place-items: center;
+  padding: 6px;
+  border-radius: 6px;
+}
+.password-toggle:hover { background: #f1f2f5; }
+.field-error {
+  color: #b42318;
+  font-size: 12px;
+  margin-top: -2px;
+}
 .select-box { position: relative; }
 .select-box select {
   appearance: none; border: 0; outline: 0; background: transparent; padding: 10px 38px 10px 12px;

@@ -17,14 +17,21 @@ import {
   Image as ImageIcon,
   ChevronDown,
   Loader2,
-  Users
+  Users,
+  ShieldCheck,
+  Eye,
+  EyeOff
 } from "lucide-react";
 import { supabase, COVER_BUCKET, PDF_BUCKET } from "./lib/supabase";
 import {
   getAuthRole,
   isAdminUser,
   isAdminWebUser,
+  isSuperAdmin,
+  listAdmins,
   listUsers,
+  createAdmin,
+  updateAdminStatus,
   updateUserStatus
 } from "./lib/adminUsers";
 
@@ -157,6 +164,7 @@ function AdminApp({ session }) {
   const [page, setPage] = useState("dashboard");
   const [mobileOpen, setMobileOpen] = useState(false);
   const canManageUsers = isAdminUser(session.user);
+  const canManageAdmins = isSuperAdmin(session.user);
 
   async function logout() {
     await supabase.auth.signOut();
@@ -169,7 +177,9 @@ function AdminApp({ session }) {
         ? "Books"
         : page === "users"
           ? "Users"
-          : "Settings";
+          : page === "admins"
+            ? "Admins"
+            : "Settings";
 
   const subtitle =
     page === "dashboard"
@@ -178,7 +188,9 @@ function AdminApp({ session }) {
         ? "Manage your HeartShapers content"
         : page === "users"
           ? "Manage HeartShapers user accounts"
-          : "Basic admin settings";
+          : page === "admins"
+            ? "Manage HeartShapers administrator accounts"
+            : "Basic admin settings";
 
   return (
     <div className="app-shell">
@@ -222,6 +234,17 @@ function AdminApp({ session }) {
               setMobileOpen(false);
             }}
           />
+          {canManageAdmins && (
+            <NavItem
+              icon={<ShieldCheck size={19} />}
+              label="Admins"
+              active={page === "admins"}
+              onClick={() => {
+                setPage("admins");
+                setMobileOpen(false);
+              }}
+            />
+          )}
         </nav>
 
         <div className="sidebar-bottom">
@@ -262,6 +285,7 @@ function AdminApp({ session }) {
           {page === "dashboard" && <Dashboard goBooks={() => setPage("books")} />}
           {page === "books" && <Books />}
           {page === "users" && <UsersPage canManageUsers={canManageUsers} />}
+          {page === "admins" && (canManageAdmins ? <AdminsPage /> : <AccessDeniedPage message="You do not have permission to manage administrator accounts." />)}
           {page === "settings" && <SettingsPage />}
         </div>
       </main>
@@ -581,7 +605,7 @@ function BookModal({ book, onClose, onSaved }) {
           .update(payload)
           .eq("id", form.id)
           .select()
-          .single();
+          .maybeSingle();
       } else {
         result = await supabase
           .from("books")
@@ -590,11 +614,20 @@ function BookModal({ book, onClose, onSaved }) {
           .single();
       }
 
-      if (result.error) throw result.error;
+      if (result?.error) {
+        console.error("Book save failed:", result.error);
+        throw new Error("Unable to update the book. Please try again.");
+      }
 
-      onSaved(result.data);
+      if (form.id && !result?.data) {
+        console.error("Book update did not return a matching record for id:", form.id);
+        throw new Error("Unable to update the book. Please try again.");
+      }
+
+      onSaved(form.id ? result.data : result.data);
     } catch (err) {
-      setError(err.message || "Something went wrong.");
+      console.error("Book save error:", err);
+      setError(err.message || "Unable to update the book. Please try again.");
     } finally {
       setBusy(false);
     }
@@ -899,6 +932,282 @@ function UserDetailsModal({ user, onClose, onToggleStatus, toggling }) {
           </button>
         </div>
       </div>
+    </div>
+  );
+}
+
+function AdminsPage() {
+  const [admins, setAdmins] = useState([]);
+  const [search, setSearch] = useState("");
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState("");
+  const [actionLoadingId, setActionLoadingId] = useState(null);
+  const [modalOpen, setModalOpen] = useState(false);
+
+  async function loadAdmins() {
+    setLoading(true);
+    setError("");
+
+    try {
+      const nextAdmins = await listAdmins();
+      setAdmins(nextAdmins);
+    } catch (err) {
+      setAdmins([]);
+      setError(err.message || "Unable to load administrator accounts.");
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  useEffect(() => {
+    loadAdmins();
+  }, []);
+
+  const filteredAdmins = useMemo(() => {
+    const query = search.trim().toLowerCase();
+    if (!query) return admins;
+
+    return admins.filter((admin) => {
+      const text = `${admin.full_name || ""} ${admin.email || ""}`.toLowerCase();
+      return text.includes(query);
+    });
+  }, [admins, search]);
+
+  async function handleStatusToggle(admin) {
+    const target = admin.disabled ? "re-enable" : "disable";
+    const confirmed = window.confirm(`Are you sure you want to ${target} this admin account?\n\n${admin.full_name || admin.email}`);
+    if (!confirmed) return;
+
+    setActionLoadingId(admin.id);
+    try {
+      await updateAdminStatus(admin.id, !admin.disabled);
+      await loadAdmins();
+    } catch (err) {
+      setError(err.message || "Unable to update this administrator account right now.");
+    } finally {
+      setActionLoadingId(null);
+    }
+  }
+
+  return (
+    <>
+      <div className="page-heading">
+        <div>
+          <h3>Admins</h3>
+          <p className="muted">Manage HeartShapers administrator accounts.</p>
+        </div>
+        <button className="primary-btn" onClick={() => setModalOpen(true)}>
+          <Plus size={18} /> Add Admin
+        </button>
+      </div>
+
+      <div className="toolbar">
+        <div className="search-box user-search-box">
+          <Search size={18} />
+          <input
+            value={search}
+            onChange={(e) => setSearch(e.target.value)}
+            placeholder="Search admins by name or email..."
+          />
+        </div>
+      </div>
+
+      {error && <div className="error-box page-error">{error}</div>}
+
+      <div className="table-card">
+        {loading ? (
+          <div className="empty-state"><Loader2 className="spin" /> Loading admins...</div>
+        ) : admins.length === 0 ? (
+          <div className="empty-state">
+            <ShieldCheck size={34} />
+            <strong>No admin accounts found</strong>
+            <span>There are currently no administrator accounts available.</span>
+          </div>
+        ) : filteredAdmins.length === 0 ? (
+          <div className="empty-state">
+            <Search size={34} />
+            <strong>No matching admins</strong>
+            <span>Try a different name or email address.</span>
+          </div>
+        ) : (
+          <div className="table-wrap">
+            <table>
+              <thead>
+                <tr>
+                  <th>Full Name</th>
+                  <th>Email</th>
+                  <th>Role</th>
+                  <th>Account Status</th>
+                  <th>Date Created</th>
+                  <th>Actions</th>
+                </tr>
+              </thead>
+              <tbody>
+                {filteredAdmins.map((admin) => (
+                  <tr key={admin.id}>
+                    <td>{admin.full_name || "Unnamed admin"}</td>
+                    <td>{admin.email || "—"}</td>
+                    <td>admin</td>
+                    <td>
+                      <span className={`status ${admin.disabled ? "disabled" : "active"}`}>
+                        {admin.disabled ? <Lock size={13} /> : <Unlock size={13} />}
+                        {admin.disabled ? "Disabled" : "Active"}
+                      </span>
+                    </td>
+                    <td>{formatDate(admin.created_at)}</td>
+                    <td>
+                      <button
+                        className="secondary-btn small danger"
+                        onClick={() => handleStatusToggle(admin)}
+                        disabled={actionLoadingId === admin.id}
+                      >
+                        {actionLoadingId === admin.id ? <Loader2 size={16} className="spin" /> : admin.disabled ? "Enable" : "Disable"}
+                      </button>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </div>
+
+      {modalOpen && (
+        <CreateAdminModal onClose={() => setModalOpen(false)} onCreated={async () => {
+          setModalOpen(false);
+          await loadAdmins();
+        }} />
+      )}
+    </>
+  );
+}
+
+function CreateAdminModal({ onClose, onCreated }) {
+  const [form, setForm] = useState({
+    full_name: "",
+    email: "",
+    password: "",
+    confirmPassword: ""
+  });
+  const [fieldErrors, setFieldErrors] = useState({});
+  const [busy, setBusy] = useState(false);
+  const [showPassword, setShowPassword] = useState(false);
+  const [showConfirmPassword, setShowConfirmPassword] = useState(false);
+
+  function updateField(field, value) {
+    setForm((current) => ({ ...current, [field]: value }));
+    setFieldErrors((current) => ({ ...current, [field]: "" }));
+  }
+
+  function validate() {
+    const errors = {};
+    if (!form.full_name.trim()) errors.full_name = "Full Name is required.";
+
+    const trimmedEmail = form.email.trim();
+    if (!trimmedEmail) errors.email = "Email is required.";
+    else if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(trimmedEmail)) errors.email = "Enter a valid email address.";
+
+    if (!form.password) errors.password = "Password is required.";
+    else if (form.password.length < 8 || form.password.length > 16) errors.password = "Password must be 8-16 characters long.";
+    else if (!/[^A-Za-z0-9]/.test(form.password)) errors.password = "Password must include at least one special character.";
+
+    if (!form.confirmPassword) errors.confirmPassword = "Please confirm the password.";
+    else if (form.confirmPassword !== form.password) errors.confirmPassword = "Passwords do not match.";
+
+    return errors;
+  }
+
+  async function submit(e) {
+    e.preventDefault();
+    const nextErrors = validate();
+    setFieldErrors(nextErrors);
+    if (Object.keys(nextErrors).length > 0) return;
+
+    setBusy(true);
+    try {
+      await createAdmin({
+        full_name: form.full_name.trim(),
+        email: form.email.trim(),
+        password: form.password
+      });
+      onCreated();
+    } catch (err) {
+      const message = err.message || "Unable to create the administrator account. Please try again.";
+      setFieldErrors({ submit: message });
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <div className="modal-backdrop">
+      <div className="modal user-modal">
+        <div className="modal-header">
+          <div>
+            <h3>Add Admin</h3>
+            <p className="muted">Create a new HeartShapers administrator account.</p>
+          </div>
+          <button className="icon-btn" onClick={onClose}><X size={20} /></button>
+        </div>
+
+        <form onSubmit={submit}>
+          <div className="modal-body">
+            {fieldErrors.submit && <div className="error-box">{fieldErrors.submit}</div>}
+
+            <label>Full Name *</label>
+            <input value={form.full_name} onChange={(e) => updateField("full_name", e.target.value)} placeholder="Enter full name" />
+            {fieldErrors.full_name && <div className="field-error">{fieldErrors.full_name}</div>}
+
+            <label>Email *</label>
+            <input type="email" value={form.email} onChange={(e) => updateField("email", e.target.value)} placeholder="admin@example.com" />
+            {fieldErrors.email && <div className="field-error">{fieldErrors.email}</div>}
+
+            <label>Password *</label>
+            <div className="password-field">
+              <input
+                type={showPassword ? "text" : "password"}
+                value={form.password}
+                onChange={(e) => updateField("password", e.target.value)}
+                placeholder="Enter password"
+              />
+              <button type="button" className="password-toggle" onClick={() => setShowPassword((current) => !current)}>
+                {showPassword ? <EyeOff size={18} /> : <Eye size={18} />}
+              </button>
+            </div>
+            {fieldErrors.password && <div className="field-error">{fieldErrors.password}</div>}
+
+            <label>Confirm Password *</label>
+            <div className="password-field">
+              <input
+                type={showConfirmPassword ? "text" : "password"}
+                value={form.confirmPassword}
+                onChange={(e) => updateField("confirmPassword", e.target.value)}
+                placeholder="Re-enter password"
+              />
+              <button type="button" className="password-toggle" onClick={() => setShowConfirmPassword((current) => !current)}>
+                {showConfirmPassword ? <EyeOff size={18} /> : <Eye size={18} />}
+              </button>
+            </div>
+            {fieldErrors.confirmPassword && <div className="field-error">{fieldErrors.confirmPassword}</div>}
+          </div>
+
+          <div className="modal-footer">
+            <button type="button" className="secondary-btn" onClick={onClose}>Cancel</button>
+            <button className="primary-btn" type="submit" disabled={busy}>
+              {busy ? <><Loader2 size={18} className="spin" /> Creating...</> : <><Plus size={18} /> Create Admin</>}
+            </button>
+          </div>
+        </form>
+      </div>
+    </div>
+  );
+}
+
+function AccessDeniedPage({ message = "You do not have permission to access this page." }) {
+  return (
+    <div className="settings-card access-card">
+      <h3>Access denied</h3>
+      <p className="muted">{message}</p>
     </div>
   );
 }
