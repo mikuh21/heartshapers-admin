@@ -600,31 +600,65 @@ function BookModal({ book, onClose, onSaved }) {
       let result;
 
       if (form.id) {
-        result = await supabase
+        const { data: existingBook, error: existingError } = await supabase
+          .from("books")
+          .select("id")
+          .eq("id", form.id)
+          .maybeSingle();
+
+        if (existingError) {
+          console.error("Book lookup failed before update", {
+            message: existingError.message,
+            code: existingError.code,
+            details: existingError.details,
+            hint: existingError.hint
+          });
+          throw existingError;
+        }
+
+        if (!existingBook) {
+          console.error("Book update skipped because no row matched the selected id", {
+            bookId: form.id
+          });
+          throw new Error("Unable to update the book. Please try again.");
+        }
+
+        const { error } = await supabase
           .from("books")
           .update(payload)
-          .eq("id", form.id)
-          .select()
-          .maybeSingle();
-      } else {
-        result = await supabase
-          .from("books")
-          .insert(payload)
-          .select()
-          .single();
+          .eq("id", form.id);
+
+        if (error) {
+          console.error("Book update failed", {
+            message: error.message,
+            code: error.code,
+            details: error.details,
+            hint: error.hint
+          });
+          throw error;
+        }
+
+        onSaved();
+        return;
       }
+
+      result = await supabase
+        .from("books")
+        .insert(payload)
+        .select()
+        .single();
 
       if (result?.error) {
-        console.error("Book save failed:", result.error);
-        throw new Error("Unable to update the book. Please try again.");
+        console.error("Book create failed", {
+          message: result.error.message,
+          code: result.error.code,
+          details: result.error.details,
+          hint: result.error.hint
+        });
+        throw result.error;
       }
 
-      if (form.id && !result?.data) {
-        console.error("Book update did not return a matching record for id:", form.id);
-        throw new Error("Unable to update the book. Please try again.");
-      }
-
-      onSaved(form.id ? result.data : result.data);
+      onSaved(result.data);
     } catch (err) {
       console.error("Book save error:", err);
       setError(err.message || "Unable to update the book. Please try again.");
