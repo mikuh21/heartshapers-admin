@@ -42,6 +42,8 @@ const EMPTY_BOOK = {
   pdf_url: "",
   pillar: "",
   subcategory: "",
+  description: "",
+  keywords: "",
   is_locked: false
 };
 
@@ -390,7 +392,7 @@ function Books() {
 
     const { data, error } = await supabase
       .from("books")
-      .select("id,title,cover_image_url,pdf_url,pillar,subcategory,created_at,is_locked")
+      .select("id,title,cover_image_url,pdf_url,pillar,subcategory,description,keywords,created_at,is_locked")
       .order("created_at", { ascending: false });
 
     if (error) setError(error.message);
@@ -534,7 +536,20 @@ function Books() {
 }
 
 function BookModal({ book, onClose, onSaved }) {
-  const [form, setForm] = useState(book ? { ...book } : { ...EMPTY_BOOK });
+  const [form, setForm] = useState(() => {
+    if (!book) return { ...EMPTY_BOOK };
+
+    return {
+      ...EMPTY_BOOK,
+      ...book,
+      description: typeof book.description === "string" ? book.description : "",
+      keywords: Array.isArray(book.keywords)
+        ? book.keywords.join(", ")
+        : typeof book.keywords === "string"
+          ? book.keywords
+          : ""
+    };
+  });
   const [coverFile, setCoverFile] = useState(null);
   const [pdfFile, setPdfFile] = useState(null);
   const [busy, setBusy] = useState(false);
@@ -542,6 +557,32 @@ function BookModal({ book, onClose, onSaved }) {
 
   function update(field, value) {
     setForm((current) => ({ ...current, [field]: value }));
+  }
+
+  function normalizeDescription(value) {
+    const trimmed = String(value || "").trim();
+    return trimmed.length > 0 ? trimmed : null;
+  }
+
+  function normalizeKeywords(value) {
+    const raw = typeof value === "string" ? value : "";
+    const cleaned = raw
+      .split(",")
+      .map((item) => item.trim())
+      .filter(Boolean);
+
+    const unique = [];
+    const seen = new Set();
+
+    for (const item of cleaned) {
+      const key = item.toLowerCase();
+      if (!seen.has(key)) {
+        seen.add(key);
+        unique.push(item);
+      }
+    }
+
+    return unique;
   }
 
   async function uploadFile(file, bucket, folder) {
@@ -594,6 +635,8 @@ function BookModal({ book, onClose, onSaved }) {
         pdf_url: pdfUrl,
         pillar: form.pillar.trim(),
         subcategory: form.subcategory.trim() || null,
+        description: normalizeDescription(form.description),
+        keywords: normalizeKeywords(form.keywords),
         is_locked: Boolean(form.is_locked)
       };
 
@@ -681,6 +724,22 @@ function BookModal({ book, onClose, onSaved }) {
 
             <label>Subcategory</label>
             <input value={form.subcategory || ""} onChange={(e) => update("subcategory", e.target.value)} placeholder="Enter subcategory" />
+
+            <label>Description</label>
+            <textarea
+              value={form.description || ""}
+              onChange={(e) => update("description", e.target.value)}
+              placeholder="Enter a description for this book"
+              rows={4}
+            />
+
+            <label>Keywords</label>
+            <input
+              value={form.keywords || ""}
+              onChange={(e) => update("keywords", e.target.value)}
+              placeholder="Evangelism, Gospel, Compassion"
+            />
+            <div className="field-hint">Separate keywords with commas.</div>
 
             <div className="file-grid">
               <FileInput

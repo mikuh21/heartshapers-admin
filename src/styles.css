@@ -13,7 +13,7 @@ body {
   background: #f6f7fb;
 }
 
-button, input, select { font: inherit; }
+button, input, select, textarea, textarea { font: inherit; }
 
 button { cursor: pointer; }
 
@@ -282,10 +282,19 @@ td { padding: 13px 17px; border-top: 1px solid #eef0f3; font-size: 13px; }
 .modal-header p { margin: 4px 0 0; }
 .modal-body { padding: 20px 22px; display: grid; gap: 8px; }
 .modal-body > label { margin-top: 4px; font-size: 13px; font-weight: 650; color: #4c5561; }
-.modal-body input:not([type="checkbox"]) {
+.modal-body input:not([type="checkbox"]),
+.modal-body textarea {
   width: 100%; border: 1px solid #dfe3ea; border-radius: 8px; padding: 10px 11px; outline: 0;
 }
-.modal-body input:focus { border-color: #89929e; }
+.modal-body textarea {
+  min-height: 110px; resize: vertical;
+}
+.modal-body input:focus, .modal-body textarea:focus { border-color: #89929e; }
+.field-hint {
+  margin-top: -2px;
+  font-size: 12px;
+  color: #7b8492;
+}
 .file-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; margin-top: 5px; }
 .file-input {
   border: 1px dashed #cfd4dc; min-height: 75px; border-radius: 8px;
