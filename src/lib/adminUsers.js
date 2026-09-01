@@ -3,6 +3,43 @@ import { supabase } from "./supabase";
 const ADMIN_USERS_FUNCTION =
   import.meta.env.VITE_ADMIN_USER_FUNCTION || "admin-user-management";
 
+export const ADMIN_WEB_ALLOWED_ROLES = ["admin", "super_admin"];
+export const NORMAL_MOBILE_ROLE = "user";
+
+function extractRoleValue(value) {
+  if (!value) return null;
+  if (Array.isArray(value)) {
+    return value.map((item) => String(item).trim().toLowerCase()).find(Boolean) || null;
+  }
+  if (typeof value === "string") {
+    return value.trim().toLowerCase();
+  }
+  return String(value).trim().toLowerCase();
+}
+
+export function getAuthRole(user) {
+  if (!user) return null;
+
+  const appMetadata = user.app_metadata || {};
+  const userMetadata = user.user_metadata || {};
+  const sources = [
+    appMetadata.role,
+    appMetadata.roles,
+    appMetadata.access_level,
+    userMetadata.role,
+    userMetadata.roles,
+    userMetadata.access_level,
+    user.role
+  ];
+
+  for (const value of sources) {
+    const normalized = extractRoleValue(value);
+    if (normalized) return normalized;
+  }
+
+  return null;
+}
+
 function normalizeUser(rawUser = {}) {
   const appMetadata = rawUser.app_metadata || {};
   const userMetadata = rawUser.user_metadata || {};
@@ -38,30 +75,21 @@ function normalizeUser(rawUser = {}) {
   };
 }
 
+export function isNormalUser(user) {
+  return getAuthRole(user) === NORMAL_MOBILE_ROLE;
+}
+
+export function isAdminWebUser(user) {
+  const role = getAuthRole(user);
+  return ADMIN_WEB_ALLOWED_ROLES.includes(role);
+}
+
+export function isSuperAdmin(user) {
+  return getAuthRole(user) === "super_admin";
+}
+
 export function isAdminUser(user) {
-  if (!user) return false;
-
-  const appMetadata = user.app_metadata || {};
-  const userMetadata = user.user_metadata || {};
-  const candidates = [
-    appMetadata.role,
-    appMetadata.is_admin,
-    appMetadata.isAdmin,
-    appMetadata.admin,
-    userMetadata.role,
-    userMetadata.is_admin,
-    userMetadata.isAdmin,
-    userMetadata.admin,
-    user.role
-  ];
-
-  const match = candidates.some((value) => {
-    if (typeof value === "boolean") return value;
-    if (typeof value === "string") return value.toLowerCase() === "admin";
-    return false;
-  });
-
-  return match;
+  return isAdminWebUser(user);
 }
 
 export async function listUsers() {

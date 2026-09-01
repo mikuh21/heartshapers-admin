@@ -20,7 +20,13 @@ import {
   Users
 } from "lucide-react";
 import { supabase, COVER_BUCKET, PDF_BUCKET } from "./lib/supabase";
-import { isAdminUser, listUsers, updateUserStatus } from "./lib/adminUsers";
+import {
+  getAuthRole,
+  isAdminUser,
+  isAdminWebUser,
+  listUsers,
+  updateUserStatus
+} from "./lib/adminUsers";
 
 const EMPTY_BOOK = {
   id: null,
@@ -51,6 +57,7 @@ function App() {
 
   if (loadingAuth) return <LoadingScreen />;
   if (!session) return <Login />;
+  if (!isAdminWebUser(session.user)) return <AdminAccessDenied />;
 
   return <AdminApp session={session} />;
 }
@@ -66,12 +73,25 @@ function Login() {
     setBusy(true);
     setError("");
 
-    const { error } = await supabase.auth.signInWithPassword({
+    const { data, error } = await supabase.auth.signInWithPassword({
       email: email.trim(),
       password
     });
 
-    if (error) setError(error.message);
+    if (error) {
+      setError(error.message);
+      setBusy(false);
+      return;
+    }
+
+    const role = getAuthRole(data.user);
+    if (!isAdminWebUser(data.user)) {
+      await supabase.auth.signOut();
+      setError("This account does not have permission to access HeartShapers Admin.");
+      setBusy(false);
+      return;
+    }
+
     setBusy(false);
   }
 
@@ -107,6 +127,27 @@ function Login() {
             {busy ? <Loader2 size={18} className="spin" /> : "Log in"}
           </button>
         </form>
+      </div>
+    </div>
+  );
+}
+
+function AdminAccessDenied() {
+  return (
+    <div className="login-page">
+      <div className="login-card">
+        <div className="brand-mark">H</div>
+        <h1>Access denied</h1>
+        <p className="muted">This account does not have permission to access HeartShapers Admin.</p>
+        <button
+          className="primary-btn full"
+          onClick={async () => {
+            await supabase.auth.signOut();
+            window.location.reload();
+          }}
+        >
+          Return to login
+        </button>
       </div>
     </div>
   );

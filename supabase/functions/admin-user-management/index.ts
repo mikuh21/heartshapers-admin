@@ -8,26 +8,42 @@ if (!SUPABASE_URL || !SERVICE_ROLE_KEY || !ANON_KEY) {
   throw new Error("Missing Supabase environment variables");
 }
 
-function isAdminIdentity(user: any) {
+function getRole(user: any) {
   const appMetadata = user?.app_metadata || {};
   const userMetadata = user?.user_metadata || {};
 
-  const values = [
-    appMetadata.role,
-    appMetadata.is_admin,
-    appMetadata.isAdmin,
-    appMetadata.admin,
-    userMetadata.role,
-    userMetadata.is_admin,
-    userMetadata.isAdmin,
-    userMetadata.admin
+  const sources = [
+    appMetadata?.role,
+    appMetadata?.roles,
+    appMetadata?.access_level,
+    userMetadata?.role,
+    userMetadata?.roles,
+    userMetadata?.access_level,
+    user?.role
   ];
 
-  return values.some((value) => {
-    if (typeof value === "boolean") return value;
-    if (typeof value === "string") return value.toLowerCase() === "admin";
-    return false;
-  });
+  for (const value of sources) {
+    if (Array.isArray(value)) {
+      const normalized = value
+        .map((entry) => String(entry).trim().toLowerCase())
+        .find(Boolean);
+      if (normalized) return normalized;
+    }
+    if (typeof value === "string") {
+      const normalized = value.trim().toLowerCase();
+      if (normalized) return normalized;
+    }
+    if (typeof value === "boolean") {
+      return value ? "admin" : null;
+    }
+  }
+
+  return null;
+}
+
+function isAdminIdentity(user: any) {
+  const role = getRole(user);
+  return role === "admin" || role === "super_admin";
 }
 
 function normalizeUser(user: any) {
