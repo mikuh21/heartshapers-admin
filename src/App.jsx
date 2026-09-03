@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useState } from "react";
+import React, { createContext, useContext, useEffect, useMemo, useRef, useState } from "react";
 import {
   BookOpen,
   LayoutDashboard,
@@ -20,7 +20,8 @@ import {
   Users,
   ShieldCheck,
   Eye,
-  EyeOff
+  EyeOff,
+  AlertTriangle
 } from "lucide-react";
 import { supabase, COVER_BUCKET, PDF_BUCKET } from "./lib/supabase";
 import {
@@ -35,9 +36,12 @@ import {
   updateUserStatus
 } from "./lib/adminUsers";
 
+const DEFAULT_BOOK_AUTHOR = "Compiled and Edited by HEARTSHAPERS";
+
 const EMPTY_BOOK = {
   id: null,
   title: "",
+  author: DEFAULT_BOOK_AUTHOR,
   cover_image_url: "",
   pdf_url: "",
   pillar: "",
@@ -46,6 +50,148 @@ const EMPTY_BOOK = {
   keywords: "",
   is_locked: false
 };
+
+const PILLAR_OPTIONS = ["Family", "Work", "Ministry"];
+const SUBCATEGORY_OPTIONS = ["Devotionals", "Discipleship", "Leadership", "Heroes of Faith", "Group Activities"];
+const ToastContext = createContext(null);
+
+function normalizeFilterValue(value) {
+  return String(value || "").trim().toLowerCase();
+}
+
+function ToastProvider({ children }) {
+  const [toasts, setToasts] = useState([]);
+
+  function removeToast(id) {
+    setToasts((current) => current.filter((toast) => toast.id !== id));
+  }
+
+  function showToast(message, type = "success") {
+    const id = `${Date.now()}-${Math.random()}`;
+    setToasts((current) => [...current, { id, message, type }]);
+  }
+
+  return (
+    <ToastContext.Provider value={{ showToast }}>
+      {children}
+      <div className="toast-region" aria-live="polite" aria-atomic="true">
+        {toasts.map((toast) => (
+          <Toast key={toast.id} {...toast} onClose={() => removeToast(toast.id)} />
+        ))}
+      </div>
+    </ToastContext.Provider>
+  );
+}
+
+function useToast() {
+  const context = useContext(ToastContext);
+  if (!context) throw new Error("useToast must be used within ToastProvider");
+  return context;
+}
+
+function Toast({ message, type, onClose }) {
+  useEffect(() => {
+    const timer = window.setTimeout(onClose, 7000);
+    return () => window.clearTimeout(timer);
+  }, []);
+
+  return (
+    <div className={`toast toast-${type}`} role={type === "error" ? "alert" : "status"}>
+      <span className="toast-indicator" aria-hidden="true" />
+      <span>{message}</span>
+      <button type="button" className="toast-close" onClick={onClose} aria-label="Dismiss notification">
+        <X size={16} />
+      </button>
+    </div>
+  );
+}
+
+function ConfirmModal({ title, message, secondaryMessage, actionLabel, busyLabel, tone = "danger", icon: Icon = AlertTriangle, onClose, onConfirm }) {
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState("");
+  const dialogRef = useRef(null);
+
+  useEffect(() => {
+    const scrollY = window.scrollY;
+    const bodyStyle = document.body.style;
+    const originalBodyStyles = {
+      overflow: bodyStyle.overflow,
+      paddingRight: bodyStyle.paddingRight,
+      position: bodyStyle.position,
+      top: bodyStyle.top,
+      width: bodyStyle.width
+    };
+    const scrollbarWidth = window.innerWidth - document.documentElement.clientWidth;
+
+    bodyStyle.overflow = "hidden";
+    bodyStyle.position = "fixed";
+    bodyStyle.top = `-${scrollY}px`;
+    bodyStyle.width = "100%";
+    if (scrollbarWidth > 0) bodyStyle.paddingRight = `${scrollbarWidth}px`;
+
+    return () => {
+      bodyStyle.overflow = originalBodyStyles.overflow;
+      bodyStyle.paddingRight = originalBodyStyles.paddingRight;
+      bodyStyle.position = originalBodyStyles.position;
+      bodyStyle.top = originalBodyStyles.top;
+      bodyStyle.width = originalBodyStyles.width;
+      window.scrollTo(0, scrollY);
+    };
+  }, []);
+
+  useEffect(() => {
+    const previousActiveElement = document.activeElement;
+    dialogRef.current?.focus();
+
+    function handleKeyDown(event) {
+      if (event.key === "Escape" && !busy) onClose();
+    }
+
+    document.addEventListener("keydown", handleKeyDown);
+    return () => {
+      document.removeEventListener("keydown", handleKeyDown);
+      previousActiveElement?.focus?.();
+    };
+  }, [busy, onClose]);
+
+  async function handleConfirm() {
+    setBusy(true);
+    setError("");
+    try {
+      const completed = await onConfirm();
+      if (completed !== false) onClose();
+    } catch (err) {
+      setError(err.message || "Unable to complete this action. Please try again.");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <div className="confirm-backdrop">
+      <div
+        className="confirm-modal"
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="confirm-modal-title"
+        tabIndex={-1}
+        ref={dialogRef}
+      >
+        <div className={`confirm-icon confirm-icon-${tone}`} aria-hidden="true"><Icon size={24} /></div>
+        <h3 id="confirm-modal-title">{title}</h3>
+        <p>{message}</p>
+        {secondaryMessage && <span>{secondaryMessage}</span>}
+        {error && <div className="error-box confirm-error">{error}</div>}
+        <div className="modal-footer confirm-footer">
+          <button type="button" className="secondary-btn" onClick={onClose} disabled={busy}>Cancel</button>
+          <button type="button" className={`${tone}-btn`} onClick={handleConfirm} disabled={busy}>
+            {busy ? busyLabel || `${actionLabel}...` : actionLabel}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
 
 function App() {
   const [session, setSession] = useState(null);
@@ -68,7 +214,11 @@ function App() {
   if (!session) return <Login />;
   if (!isAdminWebUser(session.user)) return <AdminAccessDenied />;
 
-  return <AdminApp session={session} />;
+  return (
+    <ToastProvider>
+      <AdminApp session={session} />
+    </ToastProvider>
+  );
 }
 
 function Login() {
@@ -96,7 +246,7 @@ function Login() {
     const role = getAuthRole(data.user);
     if (!isAdminWebUser(data.user)) {
       await supabase.auth.signOut();
-      setError("This account does not have permission to access HeartShapers Admin.");
+      setError("This account does not have permission to access Heartshapers Admin.");
       setBusy(false);
       return;
     }
@@ -108,7 +258,7 @@ function Login() {
     <div className="login-page">
       <div className="login-card">
         <div className="brand-mark">H</div>
-        <h1>HeartShapers</h1>
+        <h1>Heartshapers</h1>
         <p className="muted">Admin Management</p>
 
         <form onSubmit={handleLogin} className="login-form">
@@ -147,7 +297,7 @@ function AdminAccessDenied() {
       <div className="login-card">
         <div className="brand-mark">H</div>
         <h1>Access denied</h1>
-        <p className="muted">This account does not have permission to access HeartShapers Admin.</p>
+        <p className="muted">This account does not have permission to access Heartshapers Admin.</p>
         <button
           className="primary-btn full"
           onClick={async () => {
@@ -165,42 +315,25 @@ function AdminAccessDenied() {
 function AdminApp({ session }) {
   const [page, setPage] = useState("dashboard");
   const [mobileOpen, setMobileOpen] = useState(false);
+  const [logoutConfirmationOpen, setLogoutConfirmationOpen] = useState(false);
   const canManageUsers = isAdminUser(session.user);
   const canManageAdmins = isSuperAdmin(session.user);
 
   async function logout() {
-    await supabase.auth.signOut();
+    return supabase.auth.signOut();
   }
-
-  const title =
-    page === "dashboard"
-      ? "Dashboard"
-      : page === "books"
-        ? "Books"
-        : page === "users"
-          ? "Users"
-          : page === "admins"
-            ? "Admins"
-            : "Settings";
-
-  const subtitle =
-    page === "dashboard"
-      ? "Manage your HeartShapers content"
-      : page === "books"
-        ? "Manage your HeartShapers content"
-        : page === "users"
-          ? "Manage HeartShapers user accounts"
-          : page === "admins"
-            ? "Manage HeartShapers administrator accounts"
-            : "Basic admin settings";
 
   return (
     <div className="app-shell">
       <aside className={`sidebar ${mobileOpen ? "open" : ""}`}>
         <div className="sidebar-brand">
-          <div className="brand-mark small">H</div>
+          <img
+            className="sidebar-brand-logo"
+            src="/FINAL%20HEARTSHAPERS%20ICON.svg"
+            alt="Heartshapers"
+          />
           <div>
-            <strong>HeartShapers</strong>
+            <strong>Heartshapers</strong>
             <span>Admin</span>
           </div>
           <button className="icon-btn mobile-close" onClick={() => setMobileOpen(false)}>
@@ -259,7 +392,7 @@ function AdminApp({ session }) {
               setMobileOpen(false);
             }}
           />
-          <button className="nav-item logout-item" onClick={logout}>
+          <button className="nav-item logout-item" onClick={() => setLogoutConfirmationOpen(true)}>
             <LogOut size={19} />
             <span>Logout</span>
           </button>
@@ -273,10 +406,6 @@ function AdminApp({ session }) {
           <button className="icon-btn mobile-menu" onClick={() => setMobileOpen(true)}>
             <Menu size={22} />
           </button>
-          <div>
-            <h2>{title}</h2>
-            <p>{subtitle}</p>
-          </div>
           <div className="account">
             <div className="avatar">{(session.user.email || "A")[0].toUpperCase()}</div>
             <span>{session.user.email}</span>
@@ -291,6 +420,22 @@ function AdminApp({ session }) {
           {page === "settings" && <SettingsPage />}
         </div>
       </main>
+      {logoutConfirmationOpen && (
+        <ConfirmModal
+          title="Log Out?"
+          message="Are you sure you want to log out?"
+          actionLabel="Log Out"
+          busyLabel="Logging out..."
+          tone="danger"
+          icon={LogOut}
+          onClose={() => setLogoutConfirmationOpen(false)}
+          onConfirm={async () => {
+            const result = await logout();
+            if (result?.error) throw result.error;
+            return true;
+          }}
+        />
+      )}
     </div>
   );
 }
@@ -340,7 +485,7 @@ function Dashboard({ goBooks }) {
       <div className="welcome-row">
         <div>
           <h3>Overview</h3>
-          <p className="muted">A simple overview of your HeartShapers books.</p>
+          <p className="muted">A simple overview of your Heartshapers books.</p>
         </div>
         <button className="primary-btn" onClick={goBooks}>
           <BookOpen size={18} /> Manage Books
@@ -358,7 +503,7 @@ function Dashboard({ goBooks }) {
         <div className="info-icon"><BookOpen size={22} /></div>
         <div>
           <h4>Book management</h4>
-          <p>Add, edit, upload, and remove books from one simple page. Changes are saved directly to your Supabase database.</p>
+          <p>Add, edit, upload, and remove books from one simple page.</p>
         </div>
       </div>
     </>
@@ -378,13 +523,16 @@ function StatCard({ label, value, icon, loading }) {
 }
 
 function Books() {
+  const { showToast } = useToast();
   const [books, setBooks] = useState([]);
   const [search, setSearch] = useState("");
-  const [pillar, setPillar] = useState("All");
+  const [pillar, setPillar] = useState("All Pillars");
+  const [subcategory, setSubcategory] = useState("All Subcategories");
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
   const [modal, setModal] = useState(null);
   const [selected, setSelected] = useState(null);
+  const [bookToDelete, setBookToDelete] = useState(null);
 
   async function loadBooks() {
     setLoading(true);
@@ -392,7 +540,7 @@ function Books() {
 
     const { data, error } = await supabase
       .from("books")
-      .select("id,title,cover_image_url,pdf_url,pillar,subcategory,description,keywords,created_at,is_locked")
+      .select("id,title,author,cover_image_url,pdf_url,pillar,subcategory,description,keywords,created_at,is_locked")
       .order("created_at", { ascending: false });
 
     if (error) setError(error.message);
@@ -404,27 +552,25 @@ function Books() {
     loadBooks();
   }, []);
 
-  const pillars = useMemo(
-    () => ["All", ...new Set(books.map((b) => b.pillar).filter(Boolean))],
-    [books]
-  );
+  const availableSubcategories = pillar === "All Pillars" ? [] : SUBCATEGORY_OPTIONS;
 
   const filtered = books.filter((book) => {
     const text = `${book.title || ""} ${book.subcategory || ""} ${book.pillar || ""}`.toLowerCase();
-    return text.includes(search.toLowerCase()) && (pillar === "All" || book.pillar === pillar);
+    const matchesPillar = pillar === "All Pillars" || normalizeFilterValue(book.pillar) === normalizeFilterValue(pillar);
+    const matchesSubcategory = subcategory === "All Subcategories" || normalizeFilterValue(book.subcategory) === normalizeFilterValue(subcategory);
+    return text.includes(search.toLowerCase()) && matchesPillar && matchesSubcategory;
   });
 
   async function deleteBook(book) {
-    const confirmed = window.confirm(`Delete "${book.title}"? This cannot be undone.`);
-    if (!confirmed) return;
-
     const { error } = await supabase.from("books").delete().eq("id", book.id);
     if (error) {
       setError(error.message);
-      return;
+      return false;
     }
 
     setBooks((current) => current.filter((item) => item.id !== book.id));
+    showToast("Book deleted successfully.", "error");
+    return true;
   }
 
   return (
@@ -432,7 +578,7 @@ function Books() {
       <div className="page-heading">
         <div>
           <h3>Books</h3>
-          <p className="muted">Manage the books stored in HeartShapers.</p>
+          <p className="muted">Manage the books stored in Heartshapers.</p>
         </div>
         <button className="primary-btn" onClick={() => { setSelected(null); setModal("book"); }}>
           <Plus size={18} /> Add Book
@@ -450,11 +596,28 @@ function Books() {
         </div>
 
         <div className="select-box">
-          <select value={pillar} onChange={(e) => setPillar(e.target.value)}>
-            {pillars.map((item) => <option key={item}>{item}</option>)}
+          <select
+            value={pillar}
+            onChange={(e) => {
+              setPillar(e.target.value);
+              setSubcategory("All Subcategories");
+            }}
+          >
+            <option>All Pillars</option>
+            {PILLAR_OPTIONS.map((item) => <option key={item}>{item}</option>)}
           </select>
           <ChevronDown size={16} />
         </div>
+
+        {pillar !== "All Pillars" && (
+          <div className="select-box">
+            <select value={subcategory} onChange={(e) => setSubcategory(e.target.value)}>
+              <option>All Subcategories</option>
+              {availableSubcategories.map((item) => <option key={item}>{item}</option>)}
+            </select>
+            <ChevronDown size={16} />
+          </div>
+        )}
       </div>
 
       {error && <div className="error-box page-error">{error}</div>}
@@ -466,7 +629,11 @@ function Books() {
           <div className="empty-state">
             <BookOpen size={34} />
             <strong>No books found</strong>
-            <span>Add a book or change your search.</span>
+            <span>
+              {pillar !== "All Pillars" && subcategory !== "All Subcategories"
+                ? "No books found for this Pillar and Subcategory."
+                : "Add a book or change your search."}
+            </span>
           </div>
         ) : (
           <div className="table-wrap">
@@ -508,7 +675,7 @@ function Books() {
                         <button className="icon-btn" title="Edit" onClick={() => { setSelected(book); setModal("book"); }}>
                           <Pencil size={17} />
                         </button>
-                        <button className="icon-btn danger" title="Delete" onClick={() => deleteBook(book)}>
+                        <button className="icon-btn danger" title="Delete" onClick={() => setBookToDelete(book)}>
                           <Trash2 size={17} />
                         </button>
                       </div>
@@ -525,10 +692,21 @@ function Books() {
         <BookModal
           book={selected}
           onClose={() => setModal(null)}
-          onSaved={() => {
+          onSaved={async (message) => {
             setModal(null);
-            loadBooks();
+            await loadBooks();
+            showToast(message, "success");
           }}
+        />
+      )}
+      {bookToDelete && (
+        <ConfirmModal
+          title="Delete Book?"
+          message={`Are you sure you want to delete "${bookToDelete.title || "Untitled"}"?`}
+          secondaryMessage="This action cannot be undone."
+          actionLabel="Delete"
+          onClose={() => setBookToDelete(null)}
+          onConfirm={() => deleteBook(bookToDelete)}
         />
       )}
     </>
@@ -542,6 +720,7 @@ function BookModal({ book, onClose, onSaved }) {
     return {
       ...EMPTY_BOOK,
       ...book,
+      author: typeof book.author === "string" && book.author.trim() ? book.author : DEFAULT_BOOK_AUTHOR,
       description: typeof book.description === "string" ? book.description : "",
       keywords: Array.isArray(book.keywords)
         ? book.keywords.join(", ")
@@ -554,9 +733,45 @@ function BookModal({ book, onClose, onSaved }) {
   const [pdfFile, setPdfFile] = useState(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
+  const [fieldErrors, setFieldErrors] = useState({});
+  const isAdd = !form.id;
+
+  useEffect(() => {
+    const scrollY = window.scrollY;
+    const bodyStyle = document.body.style;
+    const originalBodyStyles = {
+      overflow: bodyStyle.overflow,
+      paddingRight: bodyStyle.paddingRight,
+      position: bodyStyle.position,
+      top: bodyStyle.top,
+      width: bodyStyle.width
+    };
+    const scrollbarWidth = window.innerWidth - document.documentElement.clientWidth;
+
+    bodyStyle.overflow = "hidden";
+    bodyStyle.position = "fixed";
+    bodyStyle.top = `-${scrollY}px`;
+    bodyStyle.width = "100%";
+    if (scrollbarWidth > 0) bodyStyle.paddingRight = `${scrollbarWidth}px`;
+
+    return () => {
+      bodyStyle.overflow = originalBodyStyles.overflow;
+      bodyStyle.paddingRight = originalBodyStyles.paddingRight;
+      bodyStyle.position = originalBodyStyles.position;
+      bodyStyle.top = originalBodyStyles.top;
+      bodyStyle.width = originalBodyStyles.width;
+      window.scrollTo(0, scrollY);
+    };
+  }, []);
 
   function update(field, value) {
     setForm((current) => ({ ...current, [field]: value }));
+    setFieldErrors((current) => {
+      if (!current[field]) return current;
+      const next = { ...current };
+      delete next[field];
+      return next;
+    });
   }
 
   function normalizeDescription(value) {
@@ -605,13 +820,27 @@ function BookModal({ book, onClose, onSaved }) {
     e.preventDefault();
     setError("");
 
-    if (!form.title.trim()) {
-      setError("Please enter a book title.");
-      return;
-    }
+    const errors = {};
+    const title = typeof form.title === "string" ? form.title.trim() : "";
+    const author = typeof form.author === "string" ? form.author.trim() : "";
+    const description = typeof form.description === "string" ? form.description.trim() : "";
+    const keywords = normalizeKeywords(form.keywords);
 
-    if (!form.pillar.trim()) {
-      setError("Please enter a pillar.");
+    if (!title) errors.title = "Title is required.";
+    if (!author) errors.author = "Author is required.";
+    if (!PILLAR_OPTIONS.includes(form.pillar)) errors.pillar = "Please select a pillar.";
+    if (!SUBCATEGORY_OPTIONS.includes(form.subcategory)) errors.subcategory = "Please select a subcategory.";
+    if (isAdd && !coverFile) errors.cover = "Cover image is required.";
+    if (isAdd && !pdfFile) errors.pdf = "PDF is required.";
+    if (isAdd && coverFile && !coverFile.type.startsWith("image/")) errors.cover = "Please select a valid cover image.";
+    if (isAdd && pdfFile && pdfFile.type !== "application/pdf" && !pdfFile.name.toLowerCase().endsWith(".pdf")) {
+      errors.pdf = "Please select a valid PDF file.";
+    }
+    if (isAdd && !description) errors.description = "Description is required.";
+    if (isAdd && keywords.length === 0) errors.keywords = "At least one keyword is required.";
+
+    setFieldErrors(errors);
+    if (Object.keys(errors).length > 0) {
       return;
     }
 
@@ -631,6 +860,7 @@ function BookModal({ book, onClose, onSaved }) {
 
       const payload = {
         title: form.title.trim(),
+        author,
         cover_image_url: coverUrl,
         pdf_url: pdfUrl,
         pillar: form.pillar.trim(),
@@ -672,7 +902,7 @@ function BookModal({ book, onClose, onSaved }) {
           );
         }
 
-        onSaved();
+        await onSaved("Book updated successfully.");
         return;
       }
 
@@ -692,7 +922,7 @@ function BookModal({ book, onClose, onSaved }) {
         throw result.error;
       }
 
-      onSaved(result.data);
+      await onSaved("Book added successfully.");
     } catch (err) {
       console.error("Book save error:", err);
       setError(err.message || "Unable to update the book. Please try again.");
@@ -707,7 +937,6 @@ function BookModal({ book, onClose, onSaved }) {
         <div className="modal-header">
           <div>
             <h3>{form.id ? "Edit Book" : "Add Book"}</h3>
-            <p className="muted">{form.id ? "Update this book." : "Add a book to HeartShapers."}</p>
           </div>
           <button className="icon-btn" onClick={onClose}><X size={20} /></button>
         </div>
@@ -717,29 +946,46 @@ function BookModal({ book, onClose, onSaved }) {
             {error && <div className="error-box">{error}</div>}
 
             <label>Book Title *</label>
-            <input value={form.title} onChange={(e) => update("title", e.target.value)} placeholder="Enter book title" />
+            <input value={form.title} onChange={(e) => update("title", e.target.value)} placeholder="Enter book title" aria-invalid={Boolean(fieldErrors.title)} />
+            {fieldErrors.title && <div className="field-error">{fieldErrors.title}</div>}
+
+            <label>Author *</label>
+            <input value={form.author} onChange={(e) => update("author", e.target.value)} placeholder="Enter book author" aria-invalid={Boolean(fieldErrors.author)} />
+            {fieldErrors.author && <div className="field-error">{fieldErrors.author}</div>}
 
             <label>Pillar *</label>
-            <input value={form.pillar} onChange={(e) => update("pillar", e.target.value)} placeholder="Example: Family, Work, Ministry" />
+            <select value={form.pillar} onChange={(e) => update("pillar", e.target.value)} aria-invalid={Boolean(fieldErrors.pillar)}>
+              <option value="">Select Pillar</option>
+              {PILLAR_OPTIONS.map((option) => <option key={option} value={option}>{option}</option>)}
+            </select>
+            {fieldErrors.pillar && <div className="field-error">{fieldErrors.pillar}</div>}
 
-            <label>Subcategory</label>
-            <input value={form.subcategory || ""} onChange={(e) => update("subcategory", e.target.value)} placeholder="Enter subcategory" />
+            <label>Subcategory *</label>
+            <select value={form.subcategory || ""} onChange={(e) => update("subcategory", e.target.value)} aria-invalid={Boolean(fieldErrors.subcategory)}>
+              <option value="">Select Subcategory</option>
+              {SUBCATEGORY_OPTIONS.map((option) => <option key={option} value={option}>{option}</option>)}
+            </select>
+            {fieldErrors.subcategory && <div className="field-error">{fieldErrors.subcategory}</div>}
 
-            <label>Description</label>
+            <label>Description {isAdd ? "*" : ""}</label>
             <textarea
               value={form.description || ""}
               onChange={(e) => update("description", e.target.value)}
               placeholder="Enter a description for this book"
               rows={4}
+              aria-invalid={Boolean(fieldErrors.description)}
             />
+            {fieldErrors.description && <div className="field-error">{fieldErrors.description}</div>}
 
-            <label>Keywords</label>
+            <label>Keywords {isAdd ? "*" : ""}</label>
             <input
               value={form.keywords || ""}
               onChange={(e) => update("keywords", e.target.value)}
               placeholder="Evangelism, Gospel, Compassion"
+              aria-invalid={Boolean(fieldErrors.keywords)}
             />
             <div className="field-hint">Separate keywords with commas.</div>
+            {fieldErrors.keywords && <div className="field-error">{fieldErrors.keywords}</div>}
 
             <div className="file-grid">
               <FileInput
@@ -749,6 +995,8 @@ function BookModal({ book, onClose, onSaved }) {
                 current={form.cover_image_url}
                 icon={<ImageIcon size={19} />}
                 onChange={setCoverFile}
+                error={fieldErrors.cover}
+                required={isAdd}
               />
               <FileInput
                 label="Book PDF"
@@ -757,6 +1005,8 @@ function BookModal({ book, onClose, onSaved }) {
                 current={form.pdf_url}
                 icon={<FileText size={19} />}
                 onChange={setPdfFile}
+                error={fieldErrors.pdf}
+                required={isAdd}
               />
             </div>
 
@@ -788,25 +1038,28 @@ function BookModal({ book, onClose, onSaved }) {
   );
 }
 
-function FileInput({ label, accept, file, current, icon, onChange }) {
+function FileInput({ label, accept, file, current, icon, onChange, error, required }) {
   return (
     <div>
-      <label>{label}</label>
+      <label>{label}{required ? " *" : ""}</label>
       <label className="file-input">
         <input type="file" accept={accept} onChange={(e) => onChange(e.target.files?.[0] || null)} />
         {icon}
         <span>{file ? file.name : current ? "File already uploaded" : "Choose file"}</span>
       </label>
+      {error && <div className="field-error">{error}</div>}
     </div>
   );
 }
 
 function UsersPage({ canManageUsers }) {
+  const { showToast } = useToast();
+
   if (!canManageUsers) {
     return (
       <div className="settings-card access-card">
         <h3>Access denied</h3>
-        <p className="muted">You do not have permission to manage user accounts in HeartShapers Admin.</p>
+        <p className="muted">You do not have permission to manage user accounts in Heartshapers Admin.</p>
       </div>
     );
   }
@@ -817,6 +1070,7 @@ function UsersPage({ canManageUsers }) {
   const [error, setError] = useState("");
   const [actionLoadingId, setActionLoadingId] = useState(null);
   const [selectedUser, setSelectedUser] = useState(null);
+  const [userToToggle, setUserToToggle] = useState(null);
 
   async function loadUsers() {
     setLoading(true);
@@ -848,19 +1102,19 @@ function UsersPage({ canManageUsers }) {
   }, [users, search]);
 
   async function handleStatusToggle(user) {
-    const targetState = user.disabled ? "re-enable" : "disable";
-    const confirmed = window.confirm(`Are you sure you want to ${targetState} this user?\n\n${user.full_name || user.email}`);
-    if (!confirmed) return;
-
     setActionLoadingId(user.id);
     try {
       const updatedUser = await updateUserStatus(user.id, !user.disabled);
       if (updatedUser) {
         setUsers((current) => current.map((item) => item.id === updatedUser.id ? updatedUser : item));
         setSelectedUser((currentUser) => (currentUser && currentUser.id === updatedUser.id ? updatedUser : currentUser));
+        showToast(`User ${updatedUser.disabled ? "disabled" : "enabled"} successfully.`, updatedUser.disabled ? "error" : "success");
+        return true;
       }
+      return false;
     } catch (err) {
       setError(err.message || "Unable to update this user account right now.");
+      return false;
     } finally {
       setActionLoadingId(null);
     }
@@ -871,7 +1125,7 @@ function UsersPage({ canManageUsers }) {
       <div className="page-heading">
         <div>
           <h3>Users</h3>
-          <p className="muted">Manage HeartShapers user accounts.</p>
+          <p className="muted">Manage Heartshapers user accounts.</p>
         </div>
       </div>
 
@@ -947,7 +1201,7 @@ function UsersPage({ canManageUsers }) {
                         </button>
                         <button
                           className="secondary-btn small danger"
-                          onClick={() => handleStatusToggle(user)}
+                          onClick={() => setUserToToggle(user)}
                           disabled={actionLoadingId === user.id}
                         >
                           {actionLoadingId === user.id ? <Loader2 size={16} className="spin" /> : user.disabled ? "Enable" : "Disable"}
@@ -966,8 +1220,19 @@ function UsersPage({ canManageUsers }) {
         <UserDetailsModal
           user={selectedUser}
           onClose={() => setSelectedUser(null)}
-          onToggleStatus={() => handleStatusToggle(selectedUser)}
+          onToggleStatus={() => setUserToToggle(selectedUser)}
           toggling={actionLoadingId === selectedUser.id}
+        />
+      )}
+      {userToToggle && (
+        <ConfirmModal
+          title={`${userToToggle.disabled ? "Enable" : "Disable"} User?`}
+          message={`Are you sure you want to ${userToToggle.disabled ? "enable" : "disable"} "${userToToggle.full_name || userToToggle.email || "this user"}"?`}
+          secondaryMessage={userToToggle.disabled ? "The user will regain access to the application." : "The user will no longer be able to access the application."}
+          actionLabel={userToToggle.disabled ? "Enable" : "Disable"}
+          tone={userToToggle.disabled ? "success" : "danger"}
+          onClose={() => setUserToToggle(null)}
+          onConfirm={() => handleStatusToggle(userToToggle)}
         />
       )}
     </>
@@ -1021,12 +1286,14 @@ function UserDetailsModal({ user, onClose, onToggleStatus, toggling }) {
 }
 
 function AdminsPage() {
+  const { showToast } = useToast();
   const [admins, setAdmins] = useState([]);
   const [search, setSearch] = useState("");
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
   const [actionLoadingId, setActionLoadingId] = useState(null);
   const [modalOpen, setModalOpen] = useState(false);
+  const [adminToToggle, setAdminToToggle] = useState(null);
 
   async function loadAdmins() {
     setLoading(true);
@@ -1058,16 +1325,15 @@ function AdminsPage() {
   }, [admins, search]);
 
   async function handleStatusToggle(admin) {
-    const target = admin.disabled ? "re-enable" : "disable";
-    const confirmed = window.confirm(`Are you sure you want to ${target} this admin account?\n\n${admin.full_name || admin.email}`);
-    if (!confirmed) return;
-
     setActionLoadingId(admin.id);
     try {
       await updateAdminStatus(admin.id, !admin.disabled);
       await loadAdmins();
+      showToast(`Admin ${admin.disabled ? "enabled" : "disabled"} successfully.`, admin.disabled ? "success" : "error");
+      return true;
     } catch (err) {
       setError(err.message || "Unable to update this administrator account right now.");
+      return false;
     } finally {
       setActionLoadingId(null);
     }
@@ -1078,7 +1344,7 @@ function AdminsPage() {
       <div className="page-heading">
         <div>
           <h3>Admins</h3>
-          <p className="muted">Manage HeartShapers administrator accounts.</p>
+          <p className="muted">Manage Heartshapers administrator accounts.</p>
         </div>
         <button className="primary-btn" onClick={() => setModalOpen(true)}>
           <Plus size={18} /> Add Admin
@@ -1142,7 +1408,7 @@ function AdminsPage() {
                     <td>
                       <button
                         className="secondary-btn small danger"
-                        onClick={() => handleStatusToggle(admin)}
+                        onClick={() => setAdminToToggle(admin)}
                         disabled={actionLoadingId === admin.id}
                       >
                         {actionLoadingId === admin.id ? <Loader2 size={16} className="spin" /> : admin.disabled ? "Enable" : "Disable"}
@@ -1160,7 +1426,19 @@ function AdminsPage() {
         <CreateAdminModal onClose={() => setModalOpen(false)} onCreated={async () => {
           setModalOpen(false);
           await loadAdmins();
+          showToast("Admin created successfully.", "success");
         }} />
+      )}
+      {adminToToggle && (
+        <ConfirmModal
+          title={`${adminToToggle.disabled ? "Enable" : "Disable"} Admin?`}
+          message={`Are you sure you want to ${adminToToggle.disabled ? "enable" : "disable"} "${adminToToggle.full_name || adminToToggle.email || "this admin"}"?`}
+          secondaryMessage={adminToToggle.disabled ? "The admin will regain access to the Admin application." : "The admin will no longer be able to access the Admin application."}
+          actionLabel={adminToToggle.disabled ? "Enable" : "Disable"}
+          tone={adminToToggle.disabled ? "success" : "danger"}
+          onClose={() => setAdminToToggle(null)}
+          onConfirm={() => handleStatusToggle(adminToToggle)}
+        />
       )}
     </>
   );
@@ -1229,7 +1507,7 @@ function CreateAdminModal({ onClose, onCreated }) {
         <div className="modal-header">
           <div>
             <h3>Add Admin</h3>
-            <p className="muted">Create a new HeartShapers administrator account.</p>
+            <p className="muted">Create a new Heartshapers administrator account.</p>
           </div>
           <button className="icon-btn" onClick={onClose}><X size={20} /></button>
         </div>
