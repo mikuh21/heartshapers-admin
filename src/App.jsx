@@ -59,151 +59,122 @@ const DEFAULT_CATEGORY_OPTIONS = {
 };
 const DEFAULT_UPLOAD_SETTINGS = {
   maximum_upload_size_mb: 10,
-  acceptable_file_types: ["pdf", "jpg", "jpeg", "png", "webp"]
+  acceptable_file_types: ["pdf", "jpeg", "png", "webp"]
 };
-const SUPPORTED_UPLOAD_TYPES = ["pdf", "jpg", "jpeg", "png", "webp"];
+const SUPPORTED_UPLOAD_TYPES = ["pdf", "jpeg", "png", "webp"];
 const ToastContext = createContext(null);
 
 function normalizeUploadType(value) {
   const normalized = String(value ?? "").trim().toLowerCase();
   if (!normalized) return "";
-  if (normalized === "jpg" || normalized === "jpeg") return "jpeg";
-  return normalized;
+  return normalized === "jpg" || normalized === "jpeg" ? "jpeg" : normalized;
 }
 
 function normalizeUploadSettings(rawValue = {}) {
-  const fallback = { ...DEFAULT_UPLOAD_SETTINGS, acceptable_file_types: [...DEFAULT_UPLOAD_SETTINGS.acceptable_file_types] };
   const maximumUploadSizeMb = Number(rawValue.maximum_upload_size_mb);
-  const safeMaximum = Number.isFinite(maximumUploadSizeMb) ? Math.max(0, Math.min(25, Math.trunc(maximumUploadSizeMb))) : fallback.maximum_upload_size_mb;
-
-  const selectedTypes = Array.isArray(rawValue.acceptable_file_types)
+  const maximum = Number.isFinite(maximumUploadSizeMb)
+    ? Math.max(0, Math.min(25, Math.trunc(maximumUploadSizeMb)))
+    : DEFAULT_UPLOAD_SETTINGS.maximum_upload_size_mb;
+  const types = Array.isArray(rawValue.acceptable_file_types)
     ? rawValue.acceptable_file_types
-        .map((value) => normalizeUploadType(value))
-        .filter((value) => SUPPORTED_UPLOAD_TYPES.includes(value))
-    : [...fallback.acceptable_file_types];
-
-  const uniqueTypes = [...new Set(selectedTypes)];
+        .map(normalizeUploadType)
+        .filter((type) => SUPPORTED_UPLOAD_TYPES.includes(type))
+    : DEFAULT_UPLOAD_SETTINGS.acceptable_file_types;
 
   return {
-    maximum_upload_size_mb: safeMaximum,
-    acceptable_file_types: uniqueTypes.length > 0 ? uniqueTypes : [...fallback.acceptable_file_types]
+    maximum_upload_size_mb: maximum,
+    acceptable_file_types: [...new Set(types)].length > 0
+      ? [...new Set(types)]
+      : [...DEFAULT_UPLOAD_SETTINGS.acceptable_file_types]
   };
 }
 
-function getUploadAcceptString(types = []) {
-  const normalized = Array.isArray(types)
-    ? types.map(normalizeUploadType).filter(Boolean)
-    : [];
-
-  const uniqueTypes = [...new Set(normalized)];
-  const parts = [];
-
-  if (uniqueTypes.includes("pdf")) parts.push(".pdf");
-  if (uniqueTypes.includes("jpeg")) {
-    parts.push(".jpg", ".jpeg");
-  }
-  if (uniqueTypes.includes("png")) parts.push(".png");
-  if (uniqueTypes.includes("webp")) parts.push(".webp");
-
-  return parts.join(",");
-}
-
-async function recordAdminLog(action, details = {}) {
-  try {
-    const { data } = await supabase.auth.getUser();
-    const payload = {
-      action,
-      details: details || {},
-      admin_email: details.admin_email || data?.user?.email || null
-    };
-
-    const { error } = await supabase.from("admin_logs").insert(payload);
-    if (error) {
-      console.warn("Unable to persist admin log:", error.message);
-    }
-  } catch (error) {
-    console.warn("Unable to persist admin log:", error.message);
-  }
-}
-
-async function getUploadSettings() {
+async function loadUploadSettings() {
   const { data, error } = await supabase
     .from("app_settings")
-    .select("key, value")
+    .select("value")
     .eq("key", "upload_settings")
     .maybeSingle();
 
   if (error) throw error;
-  if (!data || !data.value) return { ...DEFAULT_UPLOAD_SETTINGS, acceptable_file_types: [...DEFAULT_UPLOAD_SETTINGS.acceptable_file_types] };
-
-  return normalizeUploadSettings(data.value || {});
+  return normalizeUploadSettings(data?.value || DEFAULT_UPLOAD_SETTINGS);
 }
 
-async function ensureUploadSettingsSeed() {
-  const settings = await getUploadSettings();
-  const hasDefault = settings && settings.maximum_upload_size_mb !== undefined;
-
-  if (!hasDefault) {
-    const { error } = await supabase
-      .from("app_settings")
-      .upsert({
-        key: "upload_settings",
-        value: DEFAULT_UPLOAD_SETTINGS,
-        updated_at: new Date().toISOString(),
-        updated_by: null
-      }, { onConflict: "key" });
-
-    if (error) throw error;
-  }
-
-  return settings;
-}
-
-async function saveUploadSettingsToSupabase(settings, userId = null) {
+async function saveUploadSettingsToSupabase(settings) {
   const normalized = normalizeUploadSettings(settings);
+  const { data: userData } = await supabase.auth.getUser();
   const { error } = await supabase
     .from("app_settings")
     .upsert({
       key: "upload_settings",
       value: normalized,
       updated_at: new Date().toISOString(),
-      updated_by: userId
-    }, { onConflict: "key" });
+      updated_by: userData.user?.id || null
+    });
 
   if (error) throw error;
   return normalized;
 }
 
-function detectUploadType(file) {
-  if (!file) return null;
+async function loadAdminLogs() {
+  const { data, error } = await supabase
+    .from("admin_logs")
+    .select("id, action, details, admin_email, created_at")
+    .order("created_at", { ascending: false });
 
-  const mime = String(file.type || "").toLowerCase();
-  const fileName = String(file.name || "").toLowerCase();
-  const extension = fileName.includes(".") ? fileName.split(".").pop() : "";
-
-  if (mime.includes("pdf") || extension === "pdf") return "pdf";
-  if (mime.includes("png") || extension === "png") return "png";
-  if (mime === "image/webp" || extension === "webp") return "webp";
-  if (mime.includes("jpeg") || extension === "jpeg" || extension === "jpg") return "jpeg";
-  if (mime.includes("jpg") || extension === "jpg") return "jpeg";
-
-  return null;
+  if (error) throw error;
+  return data || [];
 }
 
-function isFileTypeAllowed(file, allowedTypes = []) {
-  if (!file) return false;
-  const normalizedAllowed = new Set((allowedTypes || []).map((value) => normalizeUploadType(value)).filter(Boolean));
-  const detectedType = detectUploadType(file);
+async function recordAdminLog(action, details = {}) {
+  const { data: userData } = await supabase.auth.getUser();
+  const { error } = await supabase.from("admin_logs").insert({
+    action,
+    details,
+    admin_email: userData.user?.email || null
+  });
 
-  if (!detectedType) return false;
-  if (normalizedAllowed.has(detectedType)) return true;
+  if (error) throw error;
+}
 
-  if (detectedType === "jpeg" && (normalizedAllowed.has("jpg") || normalizedAllowed.has("jpeg"))) return true;
-  if (detectedType === "png" && normalizedAllowed.has("png")) return true;
-  if (detectedType === "webp" && normalizedAllowed.has("webp")) return true;
-  if (detectedType === "pdf" && normalizedAllowed.has("pdf")) return true;
+function formatAdminLogAction(action = "") {
+  return String(action)
+    .split("_")
+    .filter(Boolean)
+    .map((word) => `${word[0].toUpperCase()}${word.slice(1)}`)
+    .join(" ");
+}
 
-  return false;
+function formatAdminLogDetails(log) {
+  const details = log?.details && typeof log.details === "object" ? log.details : {};
+  const action = String(log?.action || "");
+  const lines = [];
+  const isPillarAction = action.startsWith("pillar_");
+  const isCategoryAction = action.startsWith("category_");
+
+  if (action === "upload_settings_updated") {
+    if (details.maximum_upload_size_mb !== undefined) {
+      lines.push(`Maximum upload size: ${details.maximum_upload_size_mb} MB`);
+    }
+    if (Array.isArray(details.acceptable_file_types)) {
+      lines.push(`Acceptable file types: ${details.acceptable_file_types.map((type) => normalizeUploadType(type).toUpperCase()).join(", ")}`);
+    }
+    return lines;
+  }
+
+  const pillarName = isCategoryAction
+    ? details.pillar_name
+    : (details.pillar_name || (isPillarAction ? details.name : ""));
+  const categoryName = details.category_name || (isCategoryAction ? details.name : "");
+
+  if (pillarName) lines.push(`Pillar: ${pillarName}`);
+  if (categoryName) lines.push(`Category: ${categoryName}`);
+  if (details.previous_name) lines.push(`Previous name: ${details.previous_name}`);
+  if (details.book_title) lines.push(`Book: ${details.book_title}`);
+  if (details.user_email) lines.push(`User: ${details.user_email}`);
+  if (details.admin_email) lines.push(`Admin: ${details.admin_email}`);
+
+  return lines;
 }
 
 function normalizePersistentName(value) {
@@ -1149,21 +1120,6 @@ function BookModal({ book, onClose, onSaved }) {
   async function uploadFile(file, bucket, folder) {
     if (!file) return null;
 
-    const settings = await getUploadSettings();
-
-    if (settings.maximum_upload_size_mb === 0) {
-      throw new Error("File uploads are currently disabled.");
-    }
-
-    const maxBytes = settings.maximum_upload_size_mb * 1024 * 1024;
-    if (file.size > maxBytes) {
-      throw new Error(`File exceeds the maximum upload size of ${settings.maximum_upload_size_mb} MB.`);
-    }
-
-    if (!isFileTypeAllowed(file, settings.acceptable_file_types)) {
-      throw new Error("This file type is not allowed.");
-    }
-
     const safeName = file.name.toLowerCase().replace(/[^a-z0-9._-]/g, "-");
     const path = `${folder}/${crypto.randomUUID()}-${safeName}`;
 
@@ -1976,34 +1932,25 @@ function SettingsPage() {
     }
   }
 
-  async function loadUploadSettings() {
-    setUploadSettingsLoading(true);
-    try {
-      const settings = await ensureUploadSettingsSeed();
-      setUploadSettings(normalizeUploadSettings(settings));
-    } catch (err) {
-      setError(err.message || "Unable to load upload settings.");
-    } finally {
-      setUploadSettingsLoading(false);
-    }
-  }
-
-  async function loadAdminLogs() {
-    const { data, error: logsError } = await supabase
-      .from("admin_logs")
-      .select("id, action, details, admin_email, created_at")
-      .order("created_at", { ascending: false })
-      .limit(20);
-
-    if (!logsError) {
-      setAdminLogs(data || []);
-    }
-  }
-
   useEffect(() => {
     loadSettings();
-    loadUploadSettings();
-    loadAdminLogs();
+  }, []);
+
+  useEffect(() => {
+    async function loadAdditionalSettings() {
+      setUploadSettingsLoading(true);
+      try {
+        const [nextUploadSettings, nextAdminLogs] = await Promise.all([loadUploadSettings(), loadAdminLogs()]);
+        setUploadSettings(nextUploadSettings);
+        setAdminLogs(nextAdminLogs);
+      } catch (err) {
+        setError(err.message || "Unable to load upload settings and admin logs.");
+      } finally {
+        setUploadSettingsLoading(false);
+      }
+    }
+
+    loadAdditionalSettings();
   }, []);
 
   async function resetPassword() {
@@ -2013,6 +1960,22 @@ function SettingsPage() {
 
     const { error } = await supabase.auth.resetPasswordForEmail(email);
     setMessage(error ? error.message : "Password reset email sent.");
+  }
+
+  async function saveUploadSettings() {
+    setUploadSettingsLoading(true);
+    try {
+      const normalized = await saveUploadSettingsToSupabase(uploadSettings);
+      await recordAdminLog("upload_settings_updated", normalized);
+      setUploadSettings(normalized);
+      setAdminLogs(await loadAdminLogs());
+      showToast("Upload settings saved successfully.", "success");
+    } catch (err) {
+      setError(err.message || "Unable to save upload settings.");
+      showToast(err.message || "Unable to save upload settings.", "error");
+    } finally {
+      setUploadSettingsLoading(false);
+    }
   }
 
   async function savePillar(event) {
@@ -2054,7 +2017,7 @@ function SettingsPage() {
           if (updateBookError) throw updateBookError;
         }
 
-        await recordAdminLog("pillar_updated", { admin_email: (await supabase.auth.getUser()).data.user?.email || null, pillar_name: trimmed, previous_name: originalPillar.name });
+        await recordAdminLog("pillar_updated", { id: editingPillarId, name: trimmed, previous_name: originalPillar.name });
         showToast("Pillar updated successfully.", "success");
       } else {
         const { error } = await supabase
@@ -2062,7 +2025,7 @@ function SettingsPage() {
           .insert({ name: trimmed });
 
         if (error) throw error;
-        await recordAdminLog("pillar_created", { admin_email: (await supabase.auth.getUser()).data.user?.email || null, pillar_name: trimmed });
+        await recordAdminLog("pillar_created", { name: trimmed });
         showToast("Pillar added successfully.", "success");
       }
 
@@ -2070,7 +2033,6 @@ function SettingsPage() {
       setEditingPillarId(null);
       setError("");
       await loadSettings();
-      await loadAdminLogs();
     } catch (err) {
       setError(err.message || "Unable to save the pillar right now.");
       showToast(err.message || "Unable to save the pillar right now.", "error");
@@ -2131,7 +2093,7 @@ function SettingsPage() {
           if (updateBooksError) throw updateBooksError;
         }
 
-        await recordAdminLog("category_updated", { admin_email: (await supabase.auth.getUser()).data.user?.email || null, pillar_name: selectedPillar.name, category_name: trimmed, previous_name: originalCategory.name });
+        await recordAdminLog("category_updated", { id: editingCategoryId, name: trimmed, previous_name: originalCategory.name, pillar_id: selectedPillar.id, pillar_name: selectedPillar.name });
         showToast("Category updated successfully.", "success");
       } else {
         const { error } = await supabase
@@ -2139,7 +2101,7 @@ function SettingsPage() {
           .insert({ pillar_id: categoryPillarId, name: trimmed });
 
         if (error) throw error;
-        await recordAdminLog("category_created", { admin_email: (await supabase.auth.getUser()).data.user?.email || null, pillar_name: selectedPillar.name, category_name: trimmed });
+        await recordAdminLog("category_created", { name: trimmed, pillar_id: categoryPillarId, pillar_name: selectedPillar.name });
         showToast("Category added successfully.", "success");
       }
 
@@ -2147,7 +2109,6 @@ function SettingsPage() {
       setEditingCategoryId(null);
       setError("");
       await loadSettings();
-      await loadAdminLogs();
     } catch (err) {
       setError(err.message || "Unable to save the category right now.");
       showToast(err.message || "Unable to save the category right now.", "error");
@@ -2183,7 +2144,7 @@ function SettingsPage() {
 
         if (pillarDeleteError) throw pillarDeleteError;
 
-        await recordAdminLog("pillar_deleted", { admin_email: (await supabase.auth.getUser()).data.user?.email || null, pillar_name: target.name });
+        await recordAdminLog("pillar_deleted", { id: target.id, name: target.name });
         showToast("Pillar deleted successfully.", "success");
       }
 
@@ -2207,58 +2168,18 @@ function SettingsPage() {
 
         if (error) throw error;
 
-        await recordAdminLog("category_deleted", { admin_email: (await supabase.auth.getUser()).data.user?.email || null, pillar_name: targetPillar?.name || null, category_name: target.name });
+        await recordAdminLog("category_deleted", { id: target.id, name: target.name, pillar_id: target.pillar_id, pillar_name: targetPillar?.name || "" });
         showToast("Category deleted successfully.", "success");
       }
 
       setDeleteTarget(null);
       setError("");
       await loadSettings();
-      await loadAdminLogs();
       return true;
     } catch (err) {
       setError(err.message || "Unable to delete this item right now.");
       showToast(err.message || "Unable to delete this item right now.", "error");
       return false;
-    }
-  }
-
-  async function saveUploadSettings() {
-    const maximumUploadSizeMb = Number(uploadSettings.maximum_upload_size_mb);
-    if (!Number.isInteger(maximumUploadSizeMb) || maximumUploadSizeMb < 0 || maximumUploadSizeMb > 25) {
-      const errorMessage = "Maximum upload size must be between 0 and 25 MB.";
-      setError(errorMessage);
-      showToast(errorMessage, "error");
-      return;
-    }
-
-    if (!Array.isArray(uploadSettings.acceptable_file_types) || uploadSettings.acceptable_file_types.length === 0) {
-      const errorMessage = "At least one file type must remain selected.";
-      setError(errorMessage);
-      showToast(errorMessage, "error");
-      return;
-    }
-
-    try {
-      const { data } = await supabase.auth.getUser();
-      const savedSettings = await saveUploadSettingsToSupabase({
-        maximum_upload_size_mb: maximumUploadSizeMb,
-        acceptable_file_types: uploadSettings.acceptable_file_types
-      }, data?.user?.id || null);
-
-      setUploadSettings(normalizeUploadSettings(savedSettings));
-      setError("");
-      await recordAdminLog("upload_settings_updated", {
-        admin_email: data?.user?.email || null,
-        maximum_upload_size_mb: savedSettings.maximum_upload_size_mb,
-        acceptable_file_types: savedSettings.acceptable_file_types
-      });
-      await loadAdminLogs();
-      showToast("Upload settings saved successfully.", "success");
-    } catch (err) {
-      const message = err.message || "Unable to save upload settings.";
-      setError(message);
-      showToast(message, "error");
     }
   }
 
@@ -2427,13 +2348,10 @@ function SettingsPage() {
                     type="checkbox"
                     checked={uploadSettings.acceptable_file_types.includes(type)}
                     onChange={(event) => {
-                      const checked = event.target.checked;
-                      setUploadSettings((current) => {
-                        const nextTypes = checked
-                          ? [...new Set([...current.acceptable_file_types, type])]
-                          : current.acceptable_file_types.filter((value) => value !== type);
-                        return { ...current, acceptable_file_types: nextTypes };
-                      });
+                      const nextTypes = event.target.checked
+                        ? [...new Set([...uploadSettings.acceptable_file_types, type])]
+                        : uploadSettings.acceptable_file_types.filter((value) => value !== type);
+                      setUploadSettings((current) => ({ ...current, acceptable_file_types: nextTypes }));
                     }}
                   />
                   <span>{type.toUpperCase()}</span>
@@ -2462,14 +2380,12 @@ function SettingsPage() {
             {adminLogs.map((log) => (
               <div key={log.id} className="log-item">
                 <div className="log-main-row">
-                  <strong>{log.action}</strong>
+                  <strong>{formatAdminLogAction(log.action)}</strong>
                   <span>{new Date(log.created_at).toLocaleString()}</span>
                 </div>
                 <div className="log-meta">
                   <span>{log.admin_email || "Unknown admin"}</span>
-                  {log.details && Object.keys(log.details || {}).length > 0 && (
-                    <span>{JSON.stringify(log.details)}</span>
-                  )}
+                  {formatAdminLogDetails(log).map((detail) => <span key={detail}>{detail}</span>)}
                 </div>
               </div>
             ))}
