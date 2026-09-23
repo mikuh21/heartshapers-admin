@@ -51,9 +51,301 @@ const EMPTY_BOOK = {
   is_locked: false
 };
 
-const PILLAR_OPTIONS = ["Family", "Work", "Ministry"];
-const SUBCATEGORY_OPTIONS = ["Devotionals", "Discipleship", "Leadership", "Heroes of Faith", "Group Activities"];
+const DEFAULT_PILLAR_OPTIONS = ["Family", "Work", "Ministry"];
+const DEFAULT_CATEGORY_OPTIONS = {
+  Family: ["Devotionals", "Discipleship"],
+  Work: ["Leadership"],
+  Ministry: ["Heroes of Faith", "Group Activities"]
+};
+const DEFAULT_UPLOAD_SETTINGS = {
+  maximum_upload_size_mb: 10,
+  acceptable_file_types: ["pdf", "jpg", "jpeg", "png", "webp"]
+};
+const SUPPORTED_UPLOAD_TYPES = ["pdf", "jpg", "jpeg", "png", "webp"];
 const ToastContext = createContext(null);
+
+function normalizeUploadType(value) {
+  const normalized = String(value ?? "").trim().toLowerCase();
+  if (!normalized) return "";
+  if (normalized === "jpg" || normalized === "jpeg") return "jpeg";
+  return normalized;
+}
+
+function normalizeUploadSettings(rawValue = {}) {
+  const fallback = { ...DEFAULT_UPLOAD_SETTINGS, acceptable_file_types: [...DEFAULT_UPLOAD_SETTINGS.acceptable_file_types] };
+  const maximumUploadSizeMb = Number(rawValue.maximum_upload_size_mb);
+  const safeMaximum = Number.isFinite(maximumUploadSizeMb) ? Math.max(0, Math.min(25, Math.trunc(maximumUploadSizeMb))) : fallback.maximum_upload_size_mb;
+
+  const selectedTypes = Array.isArray(rawValue.acceptable_file_types)
+    ? rawValue.acceptable_file_types
+        .map((value) => normalizeUploadType(value))
+        .filter((value) => SUPPORTED_UPLOAD_TYPES.includes(value))
+    : [...fallback.acceptable_file_types];
+
+  const uniqueTypes = [...new Set(selectedTypes)];
+
+  return {
+    maximum_upload_size_mb: safeMaximum,
+    acceptable_file_types: uniqueTypes.length > 0 ? uniqueTypes : [...fallback.acceptable_file_types]
+  };
+}
+
+function getUploadAcceptString(types = []) {
+  const normalized = Array.isArray(types)
+    ? types.map(normalizeUploadType).filter(Boolean)
+    : [];
+
+  const uniqueTypes = [...new Set(normalized)];
+  const parts = [];
+
+  if (uniqueTypes.includes("pdf")) parts.push(".pdf");
+  if (uniqueTypes.includes("jpeg")) {
+    parts.push(".jpg", ".jpeg");
+  }
+  if (uniqueTypes.includes("png")) parts.push(".png");
+  if (uniqueTypes.includes("webp")) parts.push(".webp");
+
+  return parts.join(",");
+}
+
+async function recordAdminLog(action, details = {}) {
+  try {
+    const { data } = await supabase.auth.getUser();
+    const payload = {
+      action,
+      details: details || {},
+      admin_email: details.admin_email || data?.user?.email || null
+    };
+
+    const { error } = await supabase.from("admin_logs").insert(payload);
+    if (error) {
+      console.warn("Unable to persist admin log:", error.message);
+    }
+  } catch (error) {
+    console.warn("Unable to persist admin log:", error.message);
+  }
+}
+
+async function getUploadSettings() {
+  const { data, error } = await supabase
+    .from("app_settings")
+    .select("key, value")
+    .eq("key", "upload_settings")
+    .maybeSingle();
+
+  if (error) throw error;
+  if (!data || !data.value) return { ...DEFAULT_UPLOAD_SETTINGS, acceptable_file_types: [...DEFAULT_UPLOAD_SETTINGS.acceptable_file_types] };
+
+  return normalizeUploadSettings(data.value || {});
+}
+
+async function ensureUploadSettingsSeed() {
+  const settings = await getUploadSettings();
+  const hasDefault = settings && settings.maximum_upload_size_mb !== undefined;
+
+  if (!hasDefault) {
+    const { error } = await supabase
+      .from("app_settings")
+      .upsert({
+        key: "upload_settings",
+        value: DEFAULT_UPLOAD_SETTINGS,
+        updated_at: new Date().toISOString(),
+        updated_by: null
+      }, { onConflict: "key" });
+
+    if (error) throw error;
+  }
+
+  return settings;
+}
+
+async function saveUploadSettingsToSupabase(settings, userId = null) {
+  const normalized = normalizeUploadSettings(settings);
+  const { error } = await supabase
+    .from("app_settings")
+    .upsert({
+      key: "upload_settings",
+      value: normalized,
+      updated_at: new Date().toISOString(),
+      updated_by: userId
+    }, { onConflict: "key" });
+
+  if (error) throw error;
+  return normalized;
+}
+
+function detectUploadType(file) {
+  if (!file) return null;
+
+  const mime = String(file.type || "").toLowerCase();
+  const fileName = String(file.name || "").toLowerCase();
+  const extension = fileName.includes(".") ? fileName.split(".").pop() : "";
+
+  if (mime.includes("pdf") || extension === "pdf") return "pdf";
+  if (mime.includes("png") || extension === "png") return "png";
+  if (mime === "image/webp" || extension === "webp") return "webp";
+  if (mime.includes("jpeg") || extension === "jpeg" || extension === "jpg") return "jpeg";
+  if (mime.includes("jpg") || extension === "jpg") return "jpeg";
+
+  return null;
+}
+
+function isFileTypeAllowed(file, allowedTypes = []) {
+  if (!file) return false;
+  const normalizedAllowed = new Set((allowedTypes || []).map((value) => normalizeUploadType(value)).filter(Boolean));
+  const detectedType = detectUploadType(file);
+
+  if (!detectedType) return false;
+  if (normalizedAllowed.has(detectedType)) return true;
+
+  if (detectedType === "jpeg" && (normalizedAllowed.has("jpg") || normalizedAllowed.has("jpeg"))) return true;
+  if (detectedType === "png" && normalizedAllowed.has("png")) return true;
+  if (detectedType === "webp" && normalizedAllowed.has("webp")) return true;
+  if (detectedType === "pdf" && normalizedAllowed.has("pdf")) return true;
+
+  return false;
+}
+
+function normalizePersistentName(value) {
+  return String(value ?? "").trim();
+}
+
+function sortPillarNames(pillarNames = []) {
+  const definedOrder = new Map(DEFAULT_PILLAR_OPTIONS.map((name, index) => [name.toLowerCase(), index]));
+
+  return [...pillarNames].sort((left, right) => {
+    const leftIndex = definedOrder.get(left.toLowerCase());
+    const rightIndex = definedOrder.get(right.toLowerCase());
+
+    if (leftIndex !== undefined && rightIndex !== undefined) return leftIndex - rightIndex;
+    if (leftIndex !== undefined) return -1;
+    if (rightIndex !== undefined) return 1;
+    return left.localeCompare(right);
+  });
+}
+
+function sortCategoryNames(categoryNames = []) {
+  const defaultOrder = Object.values(DEFAULT_CATEGORY_OPTIONS).flat();
+  const orderLookup = new Map(defaultOrder.map((name, index) => [name.toLowerCase(), index]));
+
+  return [...categoryNames].sort((left, right) => {
+    const leftIndex = orderLookup.get(left.toLowerCase());
+    const rightIndex = orderLookup.get(right.toLowerCase());
+
+    if (leftIndex !== undefined && rightIndex !== undefined) return leftIndex - rightIndex;
+    if (leftIndex !== undefined) return -1;
+    if (rightIndex !== undefined) return 1;
+    return left.localeCompare(right);
+  });
+}
+
+async function ensureDefaultManagedSettings() {
+  const { data: pillarRows, error: pillarError } = await supabase
+    .from("pillars")
+    .select("id, name");
+
+  if (pillarError) throw pillarError;
+
+  const existingPillarNames = new Map((pillarRows || []).map((pillar) => [String(pillar.name).trim().toLowerCase(), pillar]));
+  const newPillars = DEFAULT_PILLAR_OPTIONS.filter((pillar) => !existingPillarNames.has(pillar.trim().toLowerCase()));
+
+  if (newPillars.length > 0) {
+    const { error: insertPillarError } = await supabase
+      .from("pillars")
+      .insert(newPillars.map((name) => ({ name })));
+
+    if (insertPillarError) throw insertPillarError;
+  }
+
+  const { data: allPillars, error: allPillarError } = await supabase
+    .from("pillars")
+    .select("id, name");
+
+  if (allPillarError) throw allPillarError;
+
+  const pillarByName = new Map((allPillars || []).map((pillar) => [String(pillar.name).trim().toLowerCase(), pillar]));
+  const { data: categoryRows, error: categoryError } = await supabase
+    .from("categories")
+    .select("id, pillar_id, name");
+
+  if (categoryError) throw categoryError;
+
+  const existingCategoryKeys = new Set((categoryRows || []).map((category) => {
+    const pillarName = (allPillars || []).find((pillar) => pillar.id === category.pillar_id)?.name || "";
+    return `${pillarName.trim().toLowerCase()}::${String(category.name).trim().toLowerCase()}`;
+  }));
+
+  const inserts = [];
+
+  for (const [pillarName, categoryNames] of Object.entries(DEFAULT_CATEGORY_OPTIONS)) {
+    const pillar = pillarByName.get(pillarName.trim().toLowerCase());
+    if (!pillar) continue;
+
+    for (const categoryName of categoryNames) {
+      const key = `${pillarName.trim().toLowerCase()}::${categoryName.trim().toLowerCase()}`;
+      if (!existingCategoryKeys.has(key)) {
+        inserts.push({ pillar_id: pillar.id, name: categoryName });
+      }
+    }
+  }
+
+  if (inserts.length > 0) {
+    const { error: insertCategoryError } = await supabase
+      .from("categories")
+      .insert(inserts);
+
+    if (insertCategoryError) throw insertCategoryError;
+  }
+}
+
+async function loadManagedSettings() {
+  const { data: pillarRows, error: pillarError } = await supabase
+    .from("pillars")
+    .select("id, name, created_at")
+    .order("created_at", { ascending: true });
+
+  if (pillarError) throw pillarError;
+
+  const { data: categoryRows, error: categoryError } = await supabase
+    .from("categories")
+    .select("id, pillar_id, name, created_at")
+    .order("created_at", { ascending: true });
+
+  if (categoryError) throw categoryError;
+
+  const pillarMap = new Map((pillarRows || []).map((pillar) => [pillar.id, { ...pillar, name: String(pillar.name || "").trim(), categories: [] }]));
+  for (const category of categoryRows || []) {
+    const pillar = pillarMap.get(category.pillar_id);
+    if (!pillar) continue;
+    pillar.categories.push({ ...category, name: String(category.name || "").trim() });
+  }
+
+  return (pillarRows || [])
+    .map((pillar) => {
+      const entry = pillarMap.get(pillar.id);
+      if (!entry) return null;
+      const categoryNames = sortCategoryNames(entry.categories.map((category) => category.name).filter(Boolean));
+      return {
+        id: entry.id,
+        name: entry.name,
+        created_at: entry.created_at,
+        categories: categoryNames.map((categoryName) => ({
+          id: (entry.categories.find((category) => category.name === categoryName) || {}).id,
+          name: categoryName,
+          pillar_id: entry.id
+        }))
+      };
+    })
+    .filter(Boolean)
+    .sort((left, right) => {
+      const leftOrder = DEFAULT_PILLAR_OPTIONS.indexOf(left.name);
+      const rightOrder = DEFAULT_PILLAR_OPTIONS.indexOf(right.name);
+      if (leftOrder !== -1 && rightOrder !== -1) return leftOrder - rightOrder;
+      if (leftOrder !== -1) return -1;
+      if (rightOrder !== -1) return 1;
+      return left.name.localeCompare(right.name);
+    });
+}
 
 function normalizeFilterValue(value) {
   return String(value || "").trim().toLowerCase();
@@ -552,7 +844,30 @@ function Books() {
     loadBooks();
   }, []);
 
-  const availableSubcategories = pillar === "All Pillars" ? [] : SUBCATEGORY_OPTIONS;
+  const [managedSettings, setManagedSettings] = useState({ pillars: [] });
+
+  useEffect(() => {
+    async function loadSettings() {
+      try {
+        await ensureDefaultManagedSettings();
+        const pillars = await loadManagedSettings();
+        setManagedSettings({ pillars });
+        if (pillar !== "All Pillars" && !pillars.some((item) => item.name === pillar)) {
+          setPillar("All Pillars");
+          setSubcategory("All Subcategories");
+        }
+      } catch (error) {
+        console.error("Unable to load managed settings.", error);
+      }
+    }
+
+    loadSettings();
+  }, []);
+
+  const availablePillars = managedSettings.pillars.map((item) => item.name);
+  const availableSubcategories = pillar === "All Pillars"
+    ? []
+    : (managedSettings.pillars.find((item) => item.name === pillar)?.categories || []).map((category) => category.name);
 
   const filtered = books.filter((book) => {
     const text = `${book.title || ""} ${book.subcategory || ""} ${book.pillar || ""}`.toLowerCase();
@@ -604,7 +919,7 @@ function Books() {
             }}
           >
             <option>All Pillars</option>
-            {PILLAR_OPTIONS.map((item) => <option key={item}>{item}</option>)}
+            {availablePillars.map((item) => <option key={item} value={item}>{item}</option>)}
           </select>
           <ChevronDown size={16} />
         </div>
@@ -734,7 +1049,38 @@ function BookModal({ book, onClose, onSaved }) {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
   const [fieldErrors, setFieldErrors] = useState({});
+  const [managedSettings, setManagedSettings] = useState({ pillars: [] });
+  const [settingError, setSettingError] = useState("");
   const isAdd = !form.id;
+
+  useEffect(() => {
+    async function loadSettings() {
+      try {
+        await ensureDefaultManagedSettings();
+        const pillars = await loadManagedSettings();
+        setManagedSettings({ pillars });
+      } catch (error) {
+        console.error("Unable to load managed book settings.", error);
+        setSettingError("Unable to load the current pillar and category settings.");
+      }
+    }
+
+    loadSettings();
+  }, []);
+
+  const activePillar = managedSettings.pillars.find((pillar) => pillar.name === form.pillar) || null;
+  const allowedCategories = activePillar ? activePillar.categories.map((category) => category.name) : [];
+
+  useEffect(() => {
+    if (!form.pillar) {
+      setForm((current) => ({ ...current, subcategory: "" }));
+      return;
+    }
+
+    if (form.subcategory && !allowedCategories.includes(form.subcategory)) {
+      setForm((current) => ({ ...current, subcategory: "" }));
+    }
+  }, [form.pillar, form.subcategory, allowedCategories]);
 
   useEffect(() => {
     const scrollY = window.scrollY;
@@ -803,6 +1149,21 @@ function BookModal({ book, onClose, onSaved }) {
   async function uploadFile(file, bucket, folder) {
     if (!file) return null;
 
+    const settings = await getUploadSettings();
+
+    if (settings.maximum_upload_size_mb === 0) {
+      throw new Error("File uploads are currently disabled.");
+    }
+
+    const maxBytes = settings.maximum_upload_size_mb * 1024 * 1024;
+    if (file.size > maxBytes) {
+      throw new Error(`File exceeds the maximum upload size of ${settings.maximum_upload_size_mb} MB.`);
+    }
+
+    if (!isFileTypeAllowed(file, settings.acceptable_file_types)) {
+      throw new Error("This file type is not allowed.");
+    }
+
     const safeName = file.name.toLowerCase().replace(/[^a-z0-9._-]/g, "-");
     const path = `${folder}/${crypto.randomUUID()}-${safeName}`;
 
@@ -826,10 +1187,13 @@ function BookModal({ book, onClose, onSaved }) {
     const description = typeof form.description === "string" ? form.description.trim() : "";
     const keywords = normalizeKeywords(form.keywords);
 
+    const validPillarNames = managedSettings.pillars.map((pillar) => pillar.name);
+    const validSubcategoryNames = activePillar ? activePillar.categories.map((category) => category.name) : [];
+
     if (!title) errors.title = "Title is required.";
     if (!author) errors.author = "Author is required.";
-    if (!PILLAR_OPTIONS.includes(form.pillar)) errors.pillar = "Please select a pillar.";
-    if (!SUBCATEGORY_OPTIONS.includes(form.subcategory)) errors.subcategory = "Please select a subcategory.";
+    if (!validPillarNames.includes(form.pillar)) errors.pillar = "Please select a valid pillar.";
+    if (!validSubcategoryNames.includes(form.subcategory)) errors.subcategory = "Please select a valid subcategory.";
     if (isAdd && !coverFile) errors.cover = "Cover image is required.";
     if (isAdd && !pdfFile) errors.pdf = "PDF is required.";
     if (isAdd && coverFile && !coverFile.type.startsWith("image/")) errors.cover = "Please select a valid cover image.";
@@ -944,6 +1308,7 @@ function BookModal({ book, onClose, onSaved }) {
         <form onSubmit={saveBook}>
           <div className="modal-body">
             {error && <div className="error-box">{error}</div>}
+            {settingError && <div className="error-box">{settingError}</div>}
 
             <label>Book Title *</label>
             <input value={form.title} onChange={(e) => update("title", e.target.value)} placeholder="Enter book title" aria-invalid={Boolean(fieldErrors.title)} />
@@ -956,14 +1321,14 @@ function BookModal({ book, onClose, onSaved }) {
             <label>Pillar *</label>
             <select value={form.pillar} onChange={(e) => update("pillar", e.target.value)} aria-invalid={Boolean(fieldErrors.pillar)}>
               <option value="">Select Pillar</option>
-              {PILLAR_OPTIONS.map((option) => <option key={option} value={option}>{option}</option>)}
+              {managedSettings.pillars.map((pillar) => <option key={pillar.id} value={pillar.name}>{pillar.name}</option>)}
             </select>
             {fieldErrors.pillar && <div className="field-error">{fieldErrors.pillar}</div>}
 
             <label>Subcategory *</label>
             <select value={form.subcategory || ""} onChange={(e) => update("subcategory", e.target.value)} aria-invalid={Boolean(fieldErrors.subcategory)}>
               <option value="">Select Subcategory</option>
-              {SUBCATEGORY_OPTIONS.map((option) => <option key={option} value={option}>{option}</option>)}
+              {allowedCategories.map((option) => <option key={option} value={option}>{option}</option>)}
             </select>
             {fieldErrors.subcategory && <div className="field-error">{fieldErrors.subcategory}</div>}
 
@@ -1575,7 +1940,71 @@ function AccessDeniedPage({ message = "You do not have permission to access this
 }
 
 function SettingsPage() {
+  const { showToast } = useToast();
   const [message, setMessage] = useState("");
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState("");
+  const [pillars, setPillars] = useState([]);
+  const [pillarName, setPillarName] = useState("");
+  const [editingPillarId, setEditingPillarId] = useState(null);
+  const [categoryPillarId, setCategoryPillarId] = useState("");
+  const [categoryName, setCategoryName] = useState("");
+  const [editingCategoryId, setEditingCategoryId] = useState(null);
+  const [deleteTarget, setDeleteTarget] = useState(null);
+  const [uploadSettings, setUploadSettings] = useState({ ...DEFAULT_UPLOAD_SETTINGS, acceptable_file_types: [...DEFAULT_UPLOAD_SETTINGS.acceptable_file_types] });
+  const [uploadSettingsLoading, setUploadSettingsLoading] = useState(true);
+  const [adminLogs, setAdminLogs] = useState([]);
+
+  async function loadSettings() {
+    setLoading(true);
+    setError("");
+
+    try {
+      await ensureDefaultManagedSettings();
+      const nextPillars = await loadManagedSettings();
+      setPillars(nextPillars);
+      if (!categoryPillarId && nextPillars[0]) {
+        setCategoryPillarId(nextPillars[0].id);
+      }
+      if (editingPillarId && !nextPillars.some((pillar) => pillar.id === editingPillarId)) {
+        setEditingPillarId(null);
+      }
+    } catch (err) {
+      setError(err.message || "Unable to load the current book categories.");
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  async function loadUploadSettings() {
+    setUploadSettingsLoading(true);
+    try {
+      const settings = await ensureUploadSettingsSeed();
+      setUploadSettings(normalizeUploadSettings(settings));
+    } catch (err) {
+      setError(err.message || "Unable to load upload settings.");
+    } finally {
+      setUploadSettingsLoading(false);
+    }
+  }
+
+  async function loadAdminLogs() {
+    const { data, error: logsError } = await supabase
+      .from("admin_logs")
+      .select("id, action, details, admin_email, created_at")
+      .order("created_at", { ascending: false })
+      .limit(20);
+
+    if (!logsError) {
+      setAdminLogs(data || []);
+    }
+  }
+
+  useEffect(() => {
+    loadSettings();
+    loadUploadSettings();
+    loadAdminLogs();
+  }, []);
 
   async function resetPassword() {
     const { data } = await supabase.auth.getUser();
@@ -1586,10 +2015,260 @@ function SettingsPage() {
     setMessage(error ? error.message : "Password reset email sent.");
   }
 
+  async function savePillar(event) {
+    event.preventDefault();
+    const trimmed = pillarName.trim();
+
+    if (!trimmed) {
+      setError("Pillar name is required.");
+      return;
+    }
+
+    if (pillars.some((pillar) => pillar.name.toLowerCase() === trimmed.toLowerCase() && pillar.id !== editingPillarId)) {
+      setError("A pillar with this name already exists. Duplicate names are not allowed.");
+      return;
+    }
+
+    try {
+      const originalPillar = pillars.find((pillar) => pillar.id === editingPillarId);
+
+      if (editingPillarId && originalPillar) {
+        const { error } = await supabase
+          .from("pillars")
+          .update({ name: trimmed })
+          .eq("id", editingPillarId);
+
+        if (error) throw error;
+
+        const { data: bookRows } = await supabase
+          .from("books")
+          .select("id, pillar")
+          .eq("pillar", originalPillar.name);
+
+        if (bookRows && bookRows.length > 0) {
+          const { error: updateBookError } = await supabase
+            .from("books")
+            .update({ pillar: trimmed })
+            .in("id", bookRows.map((book) => book.id));
+
+          if (updateBookError) throw updateBookError;
+        }
+
+        await recordAdminLog("pillar_updated", { admin_email: (await supabase.auth.getUser()).data.user?.email || null, pillar_name: trimmed, previous_name: originalPillar.name });
+        showToast("Pillar updated successfully.", "success");
+      } else {
+        const { error } = await supabase
+          .from("pillars")
+          .insert({ name: trimmed });
+
+        if (error) throw error;
+        await recordAdminLog("pillar_created", { admin_email: (await supabase.auth.getUser()).data.user?.email || null, pillar_name: trimmed });
+        showToast("Pillar added successfully.", "success");
+      }
+
+      setPillarName("");
+      setEditingPillarId(null);
+      setError("");
+      await loadSettings();
+      await loadAdminLogs();
+    } catch (err) {
+      setError(err.message || "Unable to save the pillar right now.");
+      showToast(err.message || "Unable to save the pillar right now.", "error");
+    }
+  }
+
+  async function saveCategory(event) {
+    event.preventDefault();
+    const trimmed = categoryName.trim();
+
+    if (!trimmed) {
+      setError("Category name is required.");
+      return;
+    }
+
+    if (!categoryPillarId) {
+      setError("Please choose a pillar first.");
+      return;
+    }
+
+    const selectedPillar = pillars.find((pillar) => pillar.id === categoryPillarId);
+    if (!selectedPillar) {
+      setError("Please choose a valid pillar.");
+      return;
+    }
+
+    const categoryMatches = (selectedPillar.categories || []).filter((category) => category.id !== editingCategoryId);
+    if (categoryMatches.some((category) => category.name.toLowerCase() === trimmed.toLowerCase())) {
+      setError("A category with this name already exists for the selected pillar.");
+      return;
+    }
+
+    try {
+      const originalCategory = editingCategoryId
+        ? (selectedPillar.categories || []).find((category) => category.id === editingCategoryId)
+        : null;
+
+      if (editingCategoryId && originalCategory) {
+        const { error } = await supabase
+          .from("categories")
+          .update({ name: trimmed })
+          .eq("id", editingCategoryId);
+
+        if (error) throw error;
+
+        const { data: matchingBooks } = await supabase
+          .from("books")
+          .select("id, pillar, subcategory")
+          .eq("pillar", selectedPillar.name)
+          .eq("subcategory", originalCategory.name);
+
+        if (matchingBooks && matchingBooks.length > 0) {
+          const { error: updateBooksError } = await supabase
+            .from("books")
+            .update({ subcategory: trimmed })
+            .in("id", matchingBooks.map((book) => book.id));
+
+          if (updateBooksError) throw updateBooksError;
+        }
+
+        await recordAdminLog("category_updated", { admin_email: (await supabase.auth.getUser()).data.user?.email || null, pillar_name: selectedPillar.name, category_name: trimmed, previous_name: originalCategory.name });
+        showToast("Category updated successfully.", "success");
+      } else {
+        const { error } = await supabase
+          .from("categories")
+          .insert({ pillar_id: categoryPillarId, name: trimmed });
+
+        if (error) throw error;
+        await recordAdminLog("category_created", { admin_email: (await supabase.auth.getUser()).data.user?.email || null, pillar_name: selectedPillar.name, category_name: trimmed });
+        showToast("Category added successfully.", "success");
+      }
+
+      setCategoryName("");
+      setEditingCategoryId(null);
+      setError("");
+      await loadSettings();
+      await loadAdminLogs();
+    } catch (err) {
+      setError(err.message || "Unable to save the category right now.");
+      showToast(err.message || "Unable to save the category right now.", "error");
+    }
+  }
+
+  async function confirmDelete(target) {
+    if (!target) return false;
+
+    try {
+      if (target.type === "pillar") {
+        const { data: booksInUse, error: findBooksError } = await supabase
+          .from("books")
+          .select("id, pillar")
+          .eq("pillar", target.name);
+
+        if (findBooksError) throw findBooksError;
+        if ((booksInUse || []).length > 0) {
+          throw new Error(`Cannot delete "${target.name}" because it is currently in use by ${booksInUse.length} book${booksInUse.length === 1 ? "" : "s"}.`);
+        }
+
+        const { error } = await supabase
+          .from("categories")
+          .delete()
+          .eq("pillar_id", target.id);
+
+        if (error) throw error;
+
+        const { error: pillarDeleteError } = await supabase
+          .from("pillars")
+          .delete()
+          .eq("id", target.id);
+
+        if (pillarDeleteError) throw pillarDeleteError;
+
+        await recordAdminLog("pillar_deleted", { admin_email: (await supabase.auth.getUser()).data.user?.email || null, pillar_name: target.name });
+        showToast("Pillar deleted successfully.", "success");
+      }
+
+      if (target.type === "category") {
+        const targetPillar = pillars.find((pillar) => pillar.id === target.pillar_id);
+        const { data: booksInUse, error: findBooksError } = await supabase
+          .from("books")
+          .select("id, pillar, subcategory")
+          .eq("pillar", targetPillar?.name || "")
+          .eq("subcategory", target.name);
+
+        if (findBooksError) throw findBooksError;
+        if ((booksInUse || []).length > 0) {
+          throw new Error(`Cannot delete "${target.name}" because it is currently in use by ${booksInUse.length} book${booksInUse.length === 1 ? "" : "s"}.`);
+        }
+
+        const { error } = await supabase
+          .from("categories")
+          .delete()
+          .eq("id", target.id);
+
+        if (error) throw error;
+
+        await recordAdminLog("category_deleted", { admin_email: (await supabase.auth.getUser()).data.user?.email || null, pillar_name: targetPillar?.name || null, category_name: target.name });
+        showToast("Category deleted successfully.", "success");
+      }
+
+      setDeleteTarget(null);
+      setError("");
+      await loadSettings();
+      await loadAdminLogs();
+      return true;
+    } catch (err) {
+      setError(err.message || "Unable to delete this item right now.");
+      showToast(err.message || "Unable to delete this item right now.", "error");
+      return false;
+    }
+  }
+
+  async function saveUploadSettings() {
+    const maximumUploadSizeMb = Number(uploadSettings.maximum_upload_size_mb);
+    if (!Number.isInteger(maximumUploadSizeMb) || maximumUploadSizeMb < 0 || maximumUploadSizeMb > 25) {
+      const errorMessage = "Maximum upload size must be between 0 and 25 MB.";
+      setError(errorMessage);
+      showToast(errorMessage, "error");
+      return;
+    }
+
+    if (!Array.isArray(uploadSettings.acceptable_file_types) || uploadSettings.acceptable_file_types.length === 0) {
+      const errorMessage = "At least one file type must remain selected.";
+      setError(errorMessage);
+      showToast(errorMessage, "error");
+      return;
+    }
+
+    try {
+      const { data } = await supabase.auth.getUser();
+      const savedSettings = await saveUploadSettingsToSupabase({
+        maximum_upload_size_mb: maximumUploadSizeMb,
+        acceptable_file_types: uploadSettings.acceptable_file_types
+      }, data?.user?.id || null);
+
+      setUploadSettings(normalizeUploadSettings(savedSettings));
+      setError("");
+      await recordAdminLog("upload_settings_updated", {
+        admin_email: data?.user?.email || null,
+        maximum_upload_size_mb: savedSettings.maximum_upload_size_mb,
+        acceptable_file_types: savedSettings.acceptable_file_types
+      });
+      await loadAdminLogs();
+      showToast("Upload settings saved successfully.", "success");
+    } catch (err) {
+      const message = err.message || "Unable to save upload settings.";
+      setError(message);
+      showToast(message, "error");
+    }
+  }
+
+  const selectedPillarData = pillars.find((pillar) => pillar.id === categoryPillarId) || null;
+
   return (
     <div className="settings-card">
       <h3>Settings</h3>
-      <p className="muted">Basic admin account settings.</p>
+      <p className="muted">Manage the Book Categories used throughout the admin app.</p>
+
       <div className="setting-row">
         <div>
           <strong>Change password</strong>
@@ -1597,7 +2276,220 @@ function SettingsPage() {
         </div>
         <button className="secondary-btn" onClick={resetPassword}>Reset Password</button>
       </div>
+
       {message && <div className="success-box">{message}</div>}
+      {error && <div className="error-box">{error}</div>}
+
+      <div className="settings-section">
+        <div className="settings-section-header">
+          <h4>BOOK CATEGORIES</h4>
+        </div>
+
+        <div className="settings-grid">
+          <div className="settings-subcard">
+            <div className="subcard-head">
+              <h5>Pillars</h5>
+            </div>
+
+            <form onSubmit={savePillar} className="settings-form">
+              <label>Pillar name</label>
+              <input
+                value={pillarName}
+                onChange={(event) => setPillarName(event.target.value)}
+                placeholder="Enter pillar name"
+              />
+              <div className="settings-form-actions">
+                <button type="submit" className="primary-btn">
+                  {editingPillarId ? "Update Pillar" : "Add Pillar"}
+                </button>
+                {editingPillarId && (
+                  <button type="button" className="secondary-btn" onClick={() => { setEditingPillarId(null); setPillarName(""); }}>
+                    Cancel
+                  </button>
+                )}
+              </div>
+            </form>
+
+            {loading ? (
+              <div className="empty-state small-empty">Loading pillars...</div>
+            ) : pillars.length === 0 ? (
+              <div className="empty-state small-empty">No pillars found.</div>
+            ) : (
+              <div className="settings-list">
+                {pillars.map((pillar) => (
+                  <div key={pillar.id} className="settings-list-item">
+                    <span>{pillar.name}</span>
+                    <div className="settings-list-actions">
+                      <button type="button" className="icon-btn" title="Edit pillar" onClick={() => { setEditingPillarId(pillar.id); setPillarName(pillar.name); }}>
+                        <Pencil size={16} />
+                      </button>
+                      <button type="button" className="icon-btn danger" title="Delete pillar" onClick={() => setDeleteTarget({ type: "pillar", id: pillar.id, name: pillar.name })}>
+                        <Trash2 size={16} />
+                      </button>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+
+          <div className="settings-subcard">
+            <div className="subcard-head">
+              <h5>Categories / Subcategories</h5>
+            </div>
+
+            <form onSubmit={saveCategory} className="settings-form">
+              <label>Pillar</label>
+              <select value={categoryPillarId} onChange={(event) => setCategoryPillarId(event.target.value)}>
+                {pillars.map((pillar) => (
+                  <option key={pillar.id} value={pillar.id}>{pillar.name}</option>
+                ))}
+              </select>
+
+              <label>Category name</label>
+              <input
+                value={categoryName}
+                onChange={(event) => setCategoryName(event.target.value)}
+                placeholder="Enter category name"
+              />
+
+              <div className="settings-form-actions">
+                <button type="submit" className="primary-btn">
+                  {editingCategoryId ? "Update Category" : "Add Category"}
+                </button>
+                {editingCategoryId && (
+                  <button type="button" className="secondary-btn" onClick={() => { setEditingCategoryId(null); setCategoryName(""); }}>
+                    Cancel
+                  </button>
+                )}
+              </div>
+            </form>
+
+            {selectedPillarData ? (
+              selectedPillarData.categories.length === 0 ? (
+                <div className="empty-state small-empty">No categories for this pillar yet.</div>
+              ) : (
+                <div className="settings-list">
+                  {selectedPillarData.categories.map((category) => (
+                    <div key={category.id} className="settings-list-item">
+                      <span>{category.name}</span>
+                      <div className="settings-list-actions">
+                        <button type="button" className="icon-btn" title="Edit category" onClick={() => { setEditingCategoryId(category.id); setCategoryPillarId(selectedPillarData.id); setCategoryName(category.name); }}>
+                          <Pencil size={16} />
+                        </button>
+                        <button type="button" className="icon-btn danger" title="Delete category" onClick={() => setDeleteTarget({ type: "category", id: category.id, name: category.name, pillar_id: selectedPillarData.id })}>
+                          <Trash2 size={16} />
+                        </button>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              )
+            ) : (
+              <div className="empty-state small-empty">Select a pillar to view categories.</div>
+            )}
+          </div>
+        </div>
+      </div>
+
+      <div className="settings-section">
+        <div className="settings-section-header">
+          <h4>UPLOAD SETTINGS</h4>
+        </div>
+
+        <div className="upload-settings-block">
+          <div className="upload-slider-wrap">
+            <div className="slider-header">
+              <label>Maximum upload size</label>
+              <strong>{uploadSettings.maximum_upload_size_mb} MB</strong>
+            </div>
+            <input
+              type="range"
+              min="0"
+              max="25"
+              step="1"
+              value={uploadSettings.maximum_upload_size_mb}
+              onChange={(event) => setUploadSettings((current) => ({ ...current, maximum_upload_size_mb: Number(event.target.value) }))}
+              disabled={uploadSettingsLoading}
+            />
+            <div className="range-labels">
+              <span>0 MB</span>
+              <span>25 MB</span>
+            </div>
+          </div>
+
+          <div className="upload-types-block">
+            <label>Acceptable file types</label>
+            <div className="type-chip-grid">
+              {SUPPORTED_UPLOAD_TYPES.map((type) => (
+                <label key={type} className="type-chip">
+                  <input
+                    type="checkbox"
+                    checked={uploadSettings.acceptable_file_types.includes(type)}
+                    onChange={(event) => {
+                      const checked = event.target.checked;
+                      setUploadSettings((current) => {
+                        const nextTypes = checked
+                          ? [...new Set([...current.acceptable_file_types, type])]
+                          : current.acceptable_file_types.filter((value) => value !== type);
+                        return { ...current, acceptable_file_types: nextTypes };
+                      });
+                    }}
+                  />
+                  <span>{type.toUpperCase()}</span>
+                </label>
+              ))}
+            </div>
+          </div>
+
+          <div className="settings-form-actions">
+            <button type="button" className="primary-btn" onClick={saveUploadSettings} disabled={uploadSettingsLoading}>
+              Save Upload Settings
+            </button>
+          </div>
+        </div>
+      </div>
+
+      <div className="settings-section">
+        <div className="settings-section-header">
+          <h4>ADMIN LOGS</h4>
+        </div>
+
+        {adminLogs.length === 0 ? (
+          <div className="empty-state small-empty">No admin activity recorded yet.</div>
+        ) : (
+          <div className="log-list">
+            {adminLogs.map((log) => (
+              <div key={log.id} className="log-item">
+                <div className="log-main-row">
+                  <strong>{log.action}</strong>
+                  <span>{new Date(log.created_at).toLocaleString()}</span>
+                </div>
+                <div className="log-meta">
+                  <span>{log.admin_email || "Unknown admin"}</span>
+                  {log.details && Object.keys(log.details || {}).length > 0 && (
+                    <span>{JSON.stringify(log.details)}</span>
+                  )}
+                </div>
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
+
+      {deleteTarget && (
+        <ConfirmModal
+          title={deleteTarget.type === "pillar" ? "Delete Pillar?" : "Delete Category?"}
+          message={`Are you sure you want to delete "${deleteTarget.name}"?`}
+          secondaryMessage={deleteTarget.type === "pillar"
+            ? "This will not automatically remove any existing book records."
+            : "This will not automatically change any existing books that use this category."}
+          actionLabel="Delete"
+          tone="danger"
+          onClose={() => setDeleteTarget(null)}
+          onConfirm={() => confirmDelete(deleteTarget)}
+        />
+      )}
     </div>
   );
 }
