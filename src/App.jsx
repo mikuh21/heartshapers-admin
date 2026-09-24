@@ -139,12 +139,19 @@ async function loadPaymentSettings() {
 async function savePaymentSettingsToSupabase(settings) {
   const { data: userData } = await supabase.auth.getUser();
   const normalized = { ...DEFAULT_PAYMENT_SETTINGS, ...settings, payment_method: "gcash" };
-  const { error } = await supabase.from("app_settings").upsert({
-    key: "payment_settings",
-    value: normalized,
-    updated_at: new Date().toISOString(),
-    updated_by: userData.user?.id || null
-  });
+  const { error } = await supabase
+    .from("app_settings")
+    .upsert(
+      {
+        key: "payment_settings",
+        value: normalized,
+        updated_at: new Date().toISOString(),
+        updated_by: userData.user?.id || null
+      },
+      {
+        onConflict: "key"
+      }
+    );
 
   if (error) throw error;
   return normalized;
