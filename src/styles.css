@@ -237,6 +237,8 @@ th {
   color: #7b8492; font-size: 11px; text-transform: uppercase; letter-spacing: .04em;
 }
 td { padding: 13px 17px; border-top: 1px solid #eef0f3; font-size: 13px; }
+.clickable-row { cursor: pointer; }
+.clickable-row:hover td { background: #fafbfc; }
 .book-cell { display: flex; align-items: center; gap: 11px; min-width: 220px; }
 .book-cell img, .cover-placeholder {
   width: 42px; height: 56px; border-radius: 5px; object-fit: cover;
@@ -251,6 +253,15 @@ td { padding: 13px 17px; border-top: 1px solid #eef0f3; font-size: 13px; }
 .status.locked, .status.disabled { background: #fff3e8; color: #a35308; }
 .status.verified { background: #edf8f0; color: #24723c; }
 .status.unverified { background: #f3f4f6; color: #6b7280; }
+.status.pending { background: #fff8e6; color: #946200; }
+.status.rejected { background: #fff1f0; color: #b42318; }
+
+.payment-modal { max-width: 760px; }
+.detail-grid { display: grid; grid-template-columns: repeat(2, 1fr); gap: 14px; margin-bottom: 20px; }
+.detail-grid > div { display: grid; gap: 4px; padding: 13px; background: #fafbfc; border: 1px solid #eef0f3; border-radius: 8px; }
+.detail-grid strong { font-size: 14px; }
+.payment-proof { display: block; width: 100%; max-height: 360px; object-fit: contain; background: #fafbfc; border: 1px solid #e7e9ef; border-radius: 8px; margin: 8px 0 18px; }
+.settings-qr-preview { display: block; width: 180px; height: 180px; object-fit: contain; border: 1px solid #e7e9ef; border-radius: 8px; margin-top: 10px; }
 
 .actions, .user-actions { display: flex; justify-content: flex-end; gap: 4px; }
 .user-actions { justify-content: flex-start; flex-wrap: wrap; }

@@ -21,7 +21,8 @@ import {
   ShieldCheck,
   Eye,
   EyeOff,
-  AlertTriangle
+  AlertTriangle,
+  Receipt
 } from "lucide-react";
 import { supabase, COVER_BUCKET, PDF_BUCKET } from "./lib/supabase";
 import {
@@ -48,6 +49,7 @@ const EMPTY_BOOK = {
   subcategory: "",
   description: "",
   keywords: "",
+  price: 0,
   is_locked: false
 };
 
@@ -62,6 +64,13 @@ const DEFAULT_UPLOAD_SETTINGS = {
   acceptable_file_types: ["pdf", "jpeg", "png", "webp"]
 };
 const SUPPORTED_UPLOAD_TYPES = ["pdf", "jpeg", "png", "webp"];
+const PAYMENT_PROOF_BUCKET = "payment-proofs";
+const DEFAULT_PAYMENT_SETTINGS = {
+  payment_method: "gcash",
+  qr_image_url: "",
+  merchant_name: "HEARTSHAPERS",
+  instructions: "Scan the GCash QR code to pay."
+};
 const ToastContext = createContext(null);
 
 function normalizeUploadType(value) {
@@ -111,6 +120,31 @@ async function saveUploadSettingsToSupabase(settings) {
       updated_at: new Date().toISOString(),
       updated_by: userData.user?.id || null
     });
+
+  if (error) throw error;
+  return normalized;
+}
+
+async function loadPaymentSettings() {
+  const { data, error } = await supabase
+    .from("app_settings")
+    .select("value")
+    .eq("key", "payment_settings")
+    .maybeSingle();
+
+  if (error) throw error;
+  return { ...DEFAULT_PAYMENT_SETTINGS, ...(data?.value || {}) };
+}
+
+async function savePaymentSettingsToSupabase(settings) {
+  const { data: userData } = await supabase.auth.getUser();
+  const normalized = { ...DEFAULT_PAYMENT_SETTINGS, ...settings, payment_method: "gcash" };
+  const { error } = await supabase.from("app_settings").upsert({
+    key: "payment_settings",
+    value: normalized,
+    updated_at: new Date().toISOString(),
+    updated_by: userData.user?.id || null
+  });
 
   if (error) throw error;
   return normalized;
@@ -643,6 +677,15 @@ function AdminApp({ session }) {
               }}
             />
           )}
+          <NavItem
+            icon={<Receipt size={19} />}
+            label="Payments"
+            active={page === "payments"}
+            onClick={() => {
+              setPage("payments");
+              setMobileOpen(false);
+            }}
+          />
         </nav>
 
         <div className="sidebar-bottom">
@@ -679,6 +722,7 @@ function AdminApp({ session }) {
           {page === "dashboard" && <Dashboard goBooks={() => setPage("books")} />}
           {page === "books" && <Books />}
           {page === "users" && <UsersPage canManageUsers={canManageUsers} />}
+          {page === "payments" && <PaymentsPage canManagePayments={canManageUsers} />}
           {page === "admins" && (canManageAdmins ? <AdminsPage /> : <AccessDeniedPage message="You do not have permission to manage administrator accounts." />)}
           {page === "settings" && <SettingsPage />}
         </div>
@@ -803,7 +847,7 @@ function Books() {
 
     const { data, error } = await supabase
       .from("books")
-      .select("id,title,author,cover_image_url,pdf_url,pillar,subcategory,description,keywords,created_at,is_locked")
+      .select("id,title,author,cover_image_url,pdf_url,pillar,subcategory,description,keywords,created_at,is_locked,price")
       .order("created_at", { ascending: false });
 
     if (error) setError(error.message);
@@ -1142,12 +1186,14 @@ function BookModal({ book, onClose, onSaved }) {
     const author = typeof form.author === "string" ? form.author.trim() : "";
     const description = typeof form.description === "string" ? form.description.trim() : "";
     const keywords = normalizeKeywords(form.keywords);
+    const price = Number(form.price);
 
     const validPillarNames = managedSettings.pillars.map((pillar) => pillar.name);
     const validSubcategoryNames = activePillar ? activePillar.categories.map((category) => category.name) : [];
 
     if (!title) errors.title = "Title is required.";
     if (!author) errors.author = "Author is required.";
+    if (!Number.isFinite(price) || price < 0) errors.price = "Price must be zero or greater.";
     if (!validPillarNames.includes(form.pillar)) errors.pillar = "Please select a valid pillar.";
     if (!validSubcategoryNames.includes(form.subcategory)) errors.subcategory = "Please select a valid subcategory.";
     if (isAdd && !coverFile) errors.cover = "Cover image is required.";
@@ -1187,6 +1233,7 @@ function BookModal({ book, onClose, onSaved }) {
         subcategory: form.subcategory.trim() || null,
         description: normalizeDescription(form.description),
         keywords: normalizeKeywords(form.keywords),
+        price,
         is_locked: Boolean(form.is_locked)
       };
 
@@ -1307,6 +1354,17 @@ function BookModal({ book, onClose, onSaved }) {
             />
             <div className="field-hint">Separate keywords with commas.</div>
             {fieldErrors.keywords && <div className="field-error">{fieldErrors.keywords}</div>}
+
+            <label>Price (₱)</label>
+            <input
+              type="number"
+              min="0"
+              step="0.01"
+              value={form.price ?? 0}
+              onChange={(e) => update("price", e.target.value)}
+              aria-invalid={Boolean(fieldErrors.price)}
+            />
+            {fieldErrors.price && <div className="field-error">{fieldErrors.price}</div>}
 
             <div className="file-grid">
               <FileInput
@@ -1895,6 +1953,100 @@ function AccessDeniedPage({ message = "You do not have permission to access this
   );
 }
 
+function formatCurrency(value) {
+  return `₱${Number(value || 0).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+}
+
+function PaymentsPage({ canManagePayments }) {
+  const { showToast } = useToast();
+  const [payments, setPayments] = useState([]);
+  const [users, setUsers] = useState([]);
+  const [search, setSearch] = useState("");
+  const [status, setStatus] = useState("all");
+  const [selected, setSelected] = useState(null);
+  const [proofUrl, setProofUrl] = useState("");
+  const [note, setNote] = useState("");
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState("");
+  const [busy, setBusy] = useState(false);
+
+  async function loadPayments() {
+    setLoading(true);
+    setError("");
+    const [{ data, error: paymentError }, userRows] = await Promise.all([
+      supabase.from("payment_submissions").select("*, books(title, price)").order("created_at", { ascending: false }),
+      listUsers().catch(() => [])
+    ]);
+    if (paymentError) setError(paymentError.message);
+    setPayments(data || []);
+    setUsers(userRows);
+    setLoading(false);
+  }
+
+  useEffect(() => { if (canManagePayments) loadPayments(); }, [canManagePayments]);
+
+  async function openPayment(payment) {
+    setSelected(payment);
+    setNote(payment.admin_notes || "");
+    setProofUrl("");
+    const { data, error: signedUrlError } = await supabase.storage
+      .from(PAYMENT_PROOF_BUCKET)
+      .createSignedUrl(payment.proof_image_url, 3600);
+    if (!signedUrlError) setProofUrl(data.signedUrl);
+  }
+
+  const userById = new Map(users.map((user) => [user.id, user]));
+  const filtered = payments.filter((payment) => {
+    const user = userById.get(payment.user_id);
+    const haystack = `${user?.full_name || ""} ${user?.email || ""} ${payment.books?.title || ""} ${payment.reference_number}`.toLowerCase();
+    return (status === "all" || payment.status === status) && haystack.includes(search.toLowerCase());
+  });
+
+  async function review(action) {
+    if (!selected) return;
+    setBusy(true);
+    try {
+      const { data, error: reviewError } = await supabase.rpc(
+        action === "verify" ? "verify_payment_submission" : "reject_payment_submission",
+        { payment_id: selected.id, note: note.trim() || null }
+      );
+      if (reviewError) throw reviewError;
+      setPayments((current) => current.map((payment) => payment.id === selected.id ? { ...payment, ...data } : payment));
+      setSelected(null);
+      showToast(action === "verify" ? "Payment verified successfully." : "Payment rejected.", "success");
+    } catch (reviewError) {
+      showToast(reviewError.message || "Unable to review this payment.", "error");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  if (!canManagePayments) return <AccessDeniedPage message="You do not have permission to manage payments." />;
+
+  return (
+    <>
+      <div className="page-heading">
+        <div><h3>Payments</h3><p className="muted">Review manual GCash payment submissions.</p></div>
+      </div>
+      <div className="toolbar">
+        <div className="search-box"><Search size={18} /><input value={search} onChange={(event) => setSearch(event.target.value)} placeholder="Search payments..." /></div>
+        <div className="select-box"><select value={status} onChange={(event) => setStatus(event.target.value)}><option value="all">All statuses</option><option value="pending">Pending</option><option value="verified">Verified</option><option value="rejected">Rejected</option></select><ChevronDown size={16} /></div>
+      </div>
+      {error && <div className="error-box page-error">{error}</div>}
+      <div className="table-card">
+        {loading ? <div className="empty-state"><Loader2 className="spin" /> Loading payments...</div> : filtered.length === 0 ? <div className="empty-state"><Receipt size={34} /><strong>No payments found</strong><span>Pending submissions will appear here.</span></div> : (
+          <div className="table-wrap"><table><thead><tr><th>Customer</th><th>Book</th><th>Amount</th><th>Reference</th><th>Status</th><th>Submitted</th></tr></thead><tbody>
+            {filtered.map((payment) => { const user = userById.get(payment.user_id); return <tr key={payment.id} onClick={() => openPayment(payment)} className="clickable-row"><td><strong>{user?.full_name || "Unknown customer"}</strong><div className="muted">{user?.email || payment.user_id}</div></td><td>{payment.books?.title || "Unknown book"}</td><td>{formatCurrency(payment.amount)}</td><td>{payment.reference_number}</td><td><span className={`status ${payment.status}`}>{payment.status}</span></td><td>{formatDate(payment.created_at)}</td></tr>; })}
+          </tbody></table></div>
+        )}
+      </div>
+      {selected && <div className="modal-backdrop"><div className="modal payment-modal"><div className="modal-header"><div><h3>Payment Review</h3><p className="muted">{selected.status} submission</p></div><button className="icon-btn" onClick={() => setSelected(null)}><X size={20} /></button></div><div className="modal-body">
+        {(() => { const user = userById.get(selected.user_id); return <><div className="detail-grid"><div><span className="muted">Customer</span><strong>{user?.full_name || "Unknown customer"}</strong><span>{user?.email || "—"}</span></div><div><span className="muted">Book</span><strong>{selected.books?.title || "Unknown book"}</strong><span>{formatCurrency(selected.books?.price)}</span></div><div><span className="muted">Amount paid</span><strong>{formatCurrency(selected.amount)}</strong><span>Ref: {selected.reference_number}</span></div><div><span className="muted">Submitted</span><strong>{formatDate(selected.created_at)}</strong><span className={`status ${selected.status}`}>{selected.status}</span></div></div><label>Payment proof</label>{proofUrl ? <img className="payment-proof" src={proofUrl} alt="Payment proof" /> : <div className="empty-state small-empty">Unable to load payment proof.</div>}{selected.status === "pending" && <><label>Admin note / rejection reason</label><textarea value={note} onChange={(event) => setNote(event.target.value)} rows={3} placeholder="Optional note for verification, required for rejection" /></>}{selected.admin_notes && selected.status !== "pending" && <p className="field-hint">Admin note: {selected.admin_notes}</p>}</>; })()}
+      </div>{selected.status === "pending" && <div className="modal-footer"><button className="secondary-btn danger" onClick={() => { if (!note.trim()) { showToast("Add a rejection reason first.", "error"); return; } review("reject"); }} disabled={busy}>Reject Payment</button><button className="primary-btn" onClick={() => review("verify")} disabled={busy}>{busy ? "Saving..." : "Verify Payment"}</button></div>}</div></div>}
+    </>
+  );
+}
+
 function SettingsPage() {
   const { showToast } = useToast();
   const [message, setMessage] = useState("");
@@ -1910,6 +2062,9 @@ function SettingsPage() {
   const [uploadSettings, setUploadSettings] = useState({ ...DEFAULT_UPLOAD_SETTINGS, acceptable_file_types: [...DEFAULT_UPLOAD_SETTINGS.acceptable_file_types] });
   const [uploadSettingsLoading, setUploadSettingsLoading] = useState(true);
   const [adminLogs, setAdminLogs] = useState([]);
+  const [paymentSettings, setPaymentSettings] = useState(DEFAULT_PAYMENT_SETTINGS);
+  const [paymentSettingsLoading, setPaymentSettingsLoading] = useState(true);
+  const [paymentQrPreview, setPaymentQrPreview] = useState("");
 
   async function loadSettings() {
     setLoading(true);
@@ -1940,13 +2095,19 @@ function SettingsPage() {
     async function loadAdditionalSettings() {
       setUploadSettingsLoading(true);
       try {
-        const [nextUploadSettings, nextAdminLogs] = await Promise.all([loadUploadSettings(), loadAdminLogs()]);
+        const [nextUploadSettings, nextAdminLogs, nextPaymentSettings] = await Promise.all([loadUploadSettings(), loadAdminLogs(), loadPaymentSettings()]);
         setUploadSettings(nextUploadSettings);
         setAdminLogs(nextAdminLogs);
+        setPaymentSettings(nextPaymentSettings);
+        if (nextPaymentSettings.qr_image_url) {
+          const { data } = await supabase.storage.from(PAYMENT_PROOF_BUCKET).createSignedUrl(nextPaymentSettings.qr_image_url, 3600);
+          setPaymentQrPreview(data?.signedUrl || "");
+        }
       } catch (err) {
         setError(err.message || "Unable to load upload settings and admin logs.");
       } finally {
         setUploadSettingsLoading(false);
+        setPaymentSettingsLoading(false);
       }
     }
 
@@ -1975,6 +2136,39 @@ function SettingsPage() {
       showToast(err.message || "Unable to save upload settings.", "error");
     } finally {
       setUploadSettingsLoading(false);
+    }
+  }
+
+  async function savePaymentSettings() {
+    setPaymentSettingsLoading(true);
+    try {
+      const normalized = await savePaymentSettingsToSupabase(paymentSettings);
+      setPaymentSettings(normalized);
+      showToast("Payment settings saved successfully.", "success");
+    } catch (err) {
+      setError(err.message || "Unable to save payment settings.");
+      showToast(err.message || "Unable to save payment settings.", "error");
+    } finally {
+      setPaymentSettingsLoading(false);
+    }
+  }
+
+  async function uploadPaymentQr(event) {
+    const file = event.target.files?.[0];
+    if (!file) return;
+    setPaymentSettingsLoading(true);
+    try {
+      const path = `settings/${crypto.randomUUID()}-${file.name.toLowerCase().replace(/[^a-z0-9._-]/g, "-")}`;
+      const { error: uploadError } = await supabase.storage.from(PAYMENT_PROOF_BUCKET).upload(path, file, { upsert: false, contentType: file.type });
+      if (uploadError) throw uploadError;
+      const { data } = await supabase.storage.from(PAYMENT_PROOF_BUCKET).createSignedUrl(path, 3600);
+      setPaymentQrPreview(data?.signedUrl || "");
+      setPaymentSettings((current) => ({ ...current, qr_image_url: path }));
+      showToast("QR image uploaded. Save payment settings to apply it.", "success");
+    } catch (err) {
+      setError(err.message || "Unable to upload the payment QR.");
+    } finally {
+      setPaymentSettingsLoading(false);
     }
   }
 
@@ -2364,6 +2558,24 @@ function SettingsPage() {
             <button type="button" className="primary-btn" onClick={saveUploadSettings} disabled={uploadSettingsLoading}>
               Save Upload Settings
             </button>
+          </div>
+        </div>
+      </div>
+
+      <div className="settings-section">
+        <div className="settings-section-header"><h4>PAYMENT SETTINGS</h4></div>
+        <div className="settings-subcard">
+          <div className="settings-form">
+            <label>Payment method</label>
+            <input value="GCash" disabled />
+            <label>Merchant name</label>
+            <input value={paymentSettings.merchant_name} onChange={(event) => setPaymentSettings((current) => ({ ...current, merchant_name: event.target.value }))} />
+            <label>Payment instructions</label>
+            <textarea rows={3} value={paymentSettings.instructions} onChange={(event) => setPaymentSettings((current) => ({ ...current, instructions: event.target.value }))} />
+            <label>GCash QR code</label>
+            <input type="file" accept="image/*" onChange={uploadPaymentQr} disabled={paymentSettingsLoading} />
+            {paymentQrPreview ? <img className="settings-qr-preview" src={paymentQrPreview} alt="Configured GCash QR" /> : <div className="field-hint">No QR code is configured yet.</div>}
+            <div className="settings-form-actions"><button type="button" className="primary-btn" onClick={savePaymentSettings} disabled={paymentSettingsLoading}>Save Payment Settings</button></div>
           </div>
         </div>
       </div>
