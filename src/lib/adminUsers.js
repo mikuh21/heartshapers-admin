@@ -123,6 +123,66 @@ export async function updateUserStatus(userId, disabled) {
   return normalizeUser(data?.user || data || null);
 }
 
+function getCreateUserErrorMessage(code, status) {
+  const messages = {
+    FULL_NAME_REQUIRED: "Full name is required.",
+    EMAIL_INVALID: "Please enter a valid Gmail address.",
+    PASSWORD_INVALID: "Password must be 8–16 characters and contain at least one special character.",
+    EMAIL_ALREADY_EXISTS: "An account with this email already exists.",
+    USER_CREATE_FAILED: "Unable to create the user account right now. Please try again.",
+    VERIFICATION_EMAIL_FAILED: "Unable to send the verification email. Please try again.",
+    UNAUTHORIZED: "Your administrator session is no longer authorized. Sign in again and retry.",
+    FORBIDDEN: "You do not have permission to create user accounts.",
+  };
+
+  return messages[code] || (status === 401
+    ? messages.UNAUTHORIZED
+    : status === 403
+      ? messages.FORBIDDEN
+      : "Unable to create the user account right now. Please try again.");
+}
+
+export async function createUser({ full_name, email, password }) {
+  let data;
+  let error;
+  try {
+    ({ data, error } = await supabase.functions.invoke(ADMIN_USERS_FUNCTION, {
+      body: {
+        action: "create-user",
+        full_name,
+        email,
+        password
+      }
+    }));
+  } catch {
+    throw new Error("Unable to create the user account right now. Please try again.");
+  }
+
+  if (error) {
+    let code = null;
+    try {
+      const response = error.context;
+      if (response && typeof response.json === "function") {
+        code = (await response.json())?.error || null;
+      }
+    } catch {
+      code = null;
+    }
+
+    throw new Error(getCreateUserErrorMessage(code, error.context?.status));
+  }
+
+  if (data?.error) {
+    throw new Error(getCreateUserErrorMessage(data.error));
+  }
+
+  if (!data?.user) {
+    throw new Error("Unable to create the user account right now. Please try again.");
+  }
+
+  return normalizeUser(data.user);
+}
+
 export async function listAdmins() {
   const { data, error } = await supabase.functions.invoke(ADMIN_MANAGEMENT_FUNCTION, {
     body: { action: "list" }

@@ -32,6 +32,7 @@ import {
   isSuperAdmin,
   listAdmins,
   listUsers,
+  createUser,
   createAdmin,
   updateAdminStatus,
   updateUserStatus
@@ -1457,6 +1458,7 @@ function UsersPage({ canManageUsers }) {
   const [actionLoadingId, setActionLoadingId] = useState(null);
   const [selectedUser, setSelectedUser] = useState(null);
   const [userToToggle, setUserToToggle] = useState(null);
+  const [modalOpen, setModalOpen] = useState(false);
 
   async function loadUsers() {
     setLoading(true);
@@ -1513,6 +1515,9 @@ function UsersPage({ canManageUsers }) {
           <h3>Users</h3>
           <p className="muted">Manage Heartshapers user accounts.</p>
         </div>
+        <button className="primary-btn" onClick={() => setModalOpen(true)}>
+          <Plus size={18} /> Add User
+        </button>
       </div>
 
       <div className="toolbar">
@@ -1602,6 +1607,16 @@ function UsersPage({ canManageUsers }) {
         )}
       </div>
 
+      {modalOpen && (
+        <CreateUserModal
+          onClose={() => setModalOpen(false)}
+          onCreated={async () => {
+            setModalOpen(false);
+            await loadUsers();
+            showToast("User account created successfully.", "success");
+          }}
+        />
+      )}
       {selectedUser && (
         <UserDetailsModal
           user={selectedUser}
@@ -1622,6 +1637,126 @@ function UsersPage({ canManageUsers }) {
         />
       )}
     </>
+  );
+}
+
+function CreateUserModal({ onClose, onCreated }) {
+  const [form, setForm] = useState({
+    full_name: "",
+    email: "",
+    password: "",
+    confirmPassword: ""
+  });
+  const [fieldErrors, setFieldErrors] = useState({});
+  const [busy, setBusy] = useState(false);
+  const [showPassword, setShowPassword] = useState(false);
+  const [showConfirmPassword, setShowConfirmPassword] = useState(false);
+
+  function updateField(field, value) {
+    setForm((current) => ({ ...current, [field]: value }));
+    setFieldErrors((current) => ({ ...current, [field]: "", submit: "" }));
+  }
+
+  function validate() {
+    const errors = {};
+    if (!form.full_name.trim()) errors.full_name = "Full Name is required.";
+
+    const trimmedEmail = form.email.trim();
+    if (!trimmedEmail) errors.email = "Email is required.";
+    else if (!/^[^\s@]+@gmail\.com$/i.test(trimmedEmail)) errors.email = "Enter a valid Gmail address.";
+
+    if (!form.password) errors.password = "Password is required.";
+    else if (form.password.length < 8 || form.password.length > 16) errors.password = "Password must be 8-16 characters long.";
+    else if (!/[^A-Za-z0-9]/.test(form.password)) errors.password = "Password must include at least one special character.";
+
+    if (!form.confirmPassword) errors.confirmPassword = "Please confirm the password.";
+    else if (form.confirmPassword !== form.password) errors.confirmPassword = "Passwords do not match.";
+
+    return errors;
+  }
+
+  async function submit(e) {
+    e.preventDefault();
+    const nextErrors = validate();
+    setFieldErrors(nextErrors);
+    if (Object.keys(nextErrors).length > 0) return;
+
+    setBusy(true);
+    try {
+      await createUser({
+        full_name: form.full_name.trim(),
+        email: form.email.trim(),
+        password: form.password
+      });
+      await onCreated();
+    } catch (err) {
+      setFieldErrors({ submit: err.message || "Unable to create the user account right now. Please try again." });
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <div className="modal-backdrop">
+      <div className="modal user-modal">
+        <div className="modal-header">
+          <div>
+            <h3>Add User</h3>
+            <p className="muted">Create a new Heartshapers user account.</p>
+          </div>
+          <button className="icon-btn" onClick={onClose}><X size={20} /></button>
+        </div>
+
+        <form onSubmit={submit}>
+          <div className="modal-body">
+            {fieldErrors.submit && <div className="error-box">{fieldErrors.submit}</div>}
+
+            <label>Full Name *</label>
+            <input value={form.full_name} onChange={(e) => updateField("full_name", e.target.value)} placeholder="Enter full name" />
+            {fieldErrors.full_name && <div className="field-error">{fieldErrors.full_name}</div>}
+
+            <label>Email *</label>
+            <input type="email" value={form.email} onChange={(e) => updateField("email", e.target.value)} placeholder="name@gmail.com" />
+            {fieldErrors.email && <div className="field-error">{fieldErrors.email}</div>}
+
+            <label>Password *</label>
+            <div className="password-field">
+              <input
+                type={showPassword ? "text" : "password"}
+                value={form.password}
+                onChange={(e) => updateField("password", e.target.value)}
+                placeholder="Enter password"
+              />
+              <button type="button" className="password-toggle" onClick={() => setShowPassword((current) => !current)}>
+                {showPassword ? <EyeOff size={18} /> : <Eye size={18} />}
+              </button>
+            </div>
+            {fieldErrors.password && <div className="field-error">{fieldErrors.password}</div>}
+
+            <label>Confirm Password *</label>
+            <div className="password-field">
+              <input
+                type={showConfirmPassword ? "text" : "password"}
+                value={form.confirmPassword}
+                onChange={(e) => updateField("confirmPassword", e.target.value)}
+                placeholder="Re-enter password"
+              />
+              <button type="button" className="password-toggle" onClick={() => setShowConfirmPassword((current) => !current)}>
+                {showConfirmPassword ? <EyeOff size={18} /> : <Eye size={18} />}
+              </button>
+            </div>
+            {fieldErrors.confirmPassword && <div className="field-error">{fieldErrors.confirmPassword}</div>}
+          </div>
+
+          <div className="modal-footer">
+            <button type="button" className="secondary-btn" onClick={onClose}>Cancel</button>
+            <button className="primary-btn" type="submit" disabled={busy}>
+              {busy ? <><Loader2 size={18} className="spin" /> Creating...</> : <><Plus size={18} /> Create User</>}
+            </button>
+          </div>
+        </form>
+      </div>
+    </div>
   );
 }
 

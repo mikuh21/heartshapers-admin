@@ -214,6 +214,115 @@ Deno.serve(async (req: Request): Promise<Response> => {
       });
     }
 
+    // CREATE A NORMAL MOBILE USER
+    if (action === "create-user") {
+      const fullName = String(body?.full_name || "").trim();
+      const email = String(body?.email || "").trim();
+      const password = String(body?.password || "");
+
+      if (!fullName) {
+        console.error("Create-user validation failed: FULL_NAME_REQUIRED");
+        return jsonResponse({ error: "FULL_NAME_REQUIRED" }, 400);
+      }
+      if (!/^[^\s@]+@gmail\.com$/i.test(email)) {
+        console.error("Create-user validation failed: EMAIL_INVALID");
+        return jsonResponse({ error: "EMAIL_INVALID" }, 400);
+      }
+      if (
+        password.length < 8 ||
+        password.length > 16 ||
+        !/[^A-Za-z0-9]/.test(password)
+      ) {
+        console.error(
+          "Create-user validation failed: PASSWORD_INVALID",
+          {
+            passwordLength: password.length,
+            hasSpecialCharacter: /[^A-Za-z0-9]/.test(password),
+          },
+        );
+        return jsonResponse({ error: "PASSWORD_INVALID" }, 400);
+      }
+
+      let createdUser: any;
+      console.log("Creating normal user account for:", email);
+      try {
+        const { data, error } = await adminClient.auth.admin.createUser({
+          email,
+          password,
+          email_confirm: false,
+          user_metadata: {
+            full_name: fullName,
+          },
+          app_metadata: {
+            role: "user",
+          },
+        });
+
+        if (error || !data?.user) {
+          const message = String(error?.message || "").toLowerCase();
+          if (
+            message.includes("already registered") ||
+            message.includes("already exists") ||
+            message.includes("already been registered")
+          ) {
+            return jsonResponse({ error: "EMAIL_ALREADY_EXISTS" }, 409);
+          }
+          if (message.includes("password") || message.includes("email")) {
+            return jsonResponse({ error: message.includes("email") ? "EMAIL_INVALID" : "PASSWORD_INVALID" }, 400);
+          }
+
+          console.error("Failed to create normal user account.");
+          return jsonResponse({ error: "USER_CREATE_FAILED" }, 500);
+        }
+
+        createdUser = data.user;
+        console.log("Successfully created normal user:", createdUser.id);
+      } catch {
+        console.error("Failed to create normal user account.");
+        return jsonResponse({ error: "USER_CREATE_FAILED" }, 500);
+      }
+
+      const emailClient = createClient(SUPABASE_URL, ANON_KEY, {
+        auth: {
+          persistSession: false,
+          autoRefreshToken: false,
+        },
+      });
+      let verificationError: { message: string } | null = null;
+      console.log("Sending verification email for:", email);
+      try {
+        const { error } = await emailClient.auth.resend({
+          type: "signup",
+          email,
+          options: {
+            emailRedirectTo: "heartshapers://auth/callback",
+          },
+        });
+        verificationError = error;
+      } catch (error: unknown) {
+        verificationError = {
+          message: error instanceof Error ? error.message : "Unknown verification email error",
+        };
+      }
+
+      if (verificationError) {
+        console.error("Verification email failed:", verificationError.message);
+        let cleanupFailed = false;
+        try {
+          const { error: deleteError } = await adminClient.auth.admin.deleteUser(createdUser.id);
+          cleanupFailed = Boolean(deleteError);
+        } catch {
+          cleanupFailed = true;
+        }
+        if (cleanupFailed) {
+          console.error("Failed to clean up user after verification email failure.");
+        }
+        return jsonResponse({ error: "VERIFICATION_EMAIL_FAILED" }, 500);
+      }
+
+      return jsonResponse({ user: normalizeUser(createdUser) }, 201);
+    }
+
     // ENABLE OR DISABLE A USER
     if (action === "update-status") {
       const userId = body?.userId;
