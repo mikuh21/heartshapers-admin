@@ -55,6 +55,7 @@ const EMPTY_BOOK = {
   is_locked: false
 };
 
+const DEFAULT_PILLAR_OPTIONS = ["Family", "Work", "Ministry"];
 const DEFAULT_CATEGORY_OPTIONS = {
   Family: ["Devotionals", "Discipleship"],
   Work: ["Leadership"],
@@ -181,12 +182,44 @@ function formatAdminLogAction(action = "") {
     .join(" ");
 }
 
+function getAdminLogSection(action) {
+  if (/^(admin_login|admin_logout|admin_login_access_denied|password_reset|unauthorized_admin_action)/.test(action)) {
+    return "Authentication";
+  }
+  if (action.startsWith("book_")) return "Books";
+  if (action.startsWith("user_")) return "Users";
+  if (action.startsWith("administrator_")) return "Admins";
+  if (action.startsWith("payment_settings_") || action.startsWith("payment_qr_")) return "Payment Settings";
+  if (action.startsWith("upload_settings_")) return "Upload Settings";
+  if (action.startsWith("payment_")) return "Payments";
+  if (action.startsWith("pillar_") || action.startsWith("category_")) return "General Settings";
+  return "Administration";
+}
+
 function formatAdminLogDetails(log) {
   const details = log?.details && typeof log.details === "object" ? log.details : {};
   const action = String(log?.action || "");
-  const lines = [];
+  const lines = [`Section: ${getAdminLogSection(action)}`];
   const isPillarAction = action.startsWith("pillar_");
   const isCategoryAction = action.startsWith("category_");
+  const changedFieldLabels = {
+    acceptable_file_types: "Acceptable File Types",
+    author: "Author",
+    cover_image_url: "Cover Image",
+    description: "Description",
+    instructions: "Payment Instructions",
+    is_locked: "Access",
+    keywords: "Keywords",
+    merchant_name: "Merchant Name",
+    maximum_upload_size_mb: "Maximum Upload Size",
+    payment_method: "Payment Method",
+    pdf_url: "PDF",
+    pillar: "Pillar",
+    price: "Price",
+    qr_image_url: "GCash QR Code",
+    subcategory: "Category",
+    title: "Title"
+  };
 
   if (action === "upload_settings_updated") {
     if (details.maximum_upload_size_mb !== undefined) {
@@ -195,11 +228,14 @@ function formatAdminLogDetails(log) {
     if (Array.isArray(details.acceptable_file_types)) {
       lines.push(`Acceptable file types: ${details.acceptable_file_types.map((type) => normalizeUploadType(type).toUpperCase()).join(", ")}`);
     }
-    return lines;
   }
 
-  if (Array.isArray(details.changed_fields) && details.changed_fields.length > 0) {
-    lines.push(`Changed: ${details.changed_fields.join(", ")}`);
+  if (Array.isArray(details.changed_fields)) {
+    const readableFields = details.changed_fields
+      .filter((field) => !(field === "is_locked" && (action === "book_locked" || action === "book_unlocked")))
+      .map((field) => changedFieldLabels[field])
+      .filter(Boolean);
+    if (readableFields.length > 0) lines.push(`Changed: ${readableFields.join(", ")}`);
   }
   if (details.price !== undefined && details.previous_price === undefined) {
     lines.push(`Price: ${formatCurrency(details.price)}`);
@@ -208,32 +244,42 @@ function formatAdminLogDetails(log) {
     lines.push(`Price: ${formatCurrency(details.previous_price)} → ${formatCurrency(details.price)}`);
   }
   if (details.is_locked !== undefined) lines.push(`Access: ${details.is_locked ? "Locked" : "Unlocked"}`);
-  if (details.status) lines.push(`Status: ${details.status}`);
+  if (details.status) lines.push(`Status: ${details.status.charAt(0).toUpperCase()}${details.status.slice(1)}`);
+  else if (action === "payment_verified") lines.push("Status: Verified");
+  else if (action === "payment_rejected") lines.push("Status: Rejected");
   if (details.amount !== undefined) lines.push(`Amount: ${formatCurrency(details.amount)}`);
-  if (details.customer_id) lines.push(`Customer ID: ${details.customer_id}`);
+  if (details.customer_name || details.customer_email) {
+    lines.push(`Customer: ${details.customer_name || details.customer_email}`);
+  }
   if (details.reference_number) lines.push(`Reference: ${details.reference_number}`);
   if (details.rejection_reason) lines.push(`Reason: ${details.rejection_reason}`);
-  if (details.failure_code) lines.push(`Failure code: ${details.failure_code}`);
-  if (details.file_type) lines.push(`File type: ${details.file_type}`);
-  if (details.operation) lines.push(`Operation: ${details.operation}`);
-  if (details.target_type || details.target_name || details.target_id) {
-    const target = details.target_name || details.target_id || details.target_type;
-    lines.push(`Target: ${target}${details.target_id && details.target_name ? ` (${details.target_id})` : ""}`);
-  }
+  if (details.file_type) lines.push(`File type: ${formatAdminLogFileType(details.file_type)}`);
 
   const pillarName = isCategoryAction
     ? details.pillar_name
     : (details.pillar_name || (isPillarAction ? details.name : ""));
   const categoryName = details.category_name || (isCategoryAction ? details.name : "");
 
+  const targetName = details.target_name || details.book_title || details.user_name || details.user_email || details.admin_name;
+  if (!isPillarAction && !isCategoryAction && targetName) {
+    lines.push(`Target: ${targetName}`);
+  }
   if (pillarName) lines.push(`Pillar: ${pillarName}`);
   if (categoryName) lines.push(`Category: ${categoryName}`);
   if (details.previous_name) lines.push(`Previous name: ${details.previous_name}`);
-  if (details.book_title) lines.push(`Book: ${details.book_title}`);
-  if (details.user_email) lines.push(`User: ${details.user_email}`);
-  if (details.admin_email) lines.push(`Admin: ${details.admin_email}`);
+  if (details.user_email && details.target_name !== details.user_email) lines.push(`User: ${details.user_email}`);
+  if (details.admin_email && details.target_name !== details.admin_email) lines.push(`Administrator: ${details.admin_email}`);
 
   return lines;
+}
+
+function formatAdminLogFileType(fileType) {
+  const normalized = String(fileType).toLowerCase();
+  if (normalized.includes("pdf")) return "PDF";
+  if (normalized.includes("png")) return "PNG image";
+  if (normalized.includes("jpeg") || normalized.includes("jpg")) return "JPEG image";
+  if (normalized.includes("webp")) return "WebP image";
+  return "Image";
 }
 
 function normalizePersistentName(value) {
@@ -1130,6 +1176,7 @@ function BookModal({ book, onClose, onSaved }) {
   const [error, setError] = useState("");
   const [fieldErrors, setFieldErrors] = useState({});
   const [managedSettings, setManagedSettings] = useState({ pillars: [] });
+  const [managedSettingsLoaded, setManagedSettingsLoaded] = useState(false);
   const [settingError, setSettingError] = useState("");
   const isAdd = !form.id;
 
@@ -1139,6 +1186,7 @@ function BookModal({ book, onClose, onSaved }) {
         await ensureDefaultManagedSettings();
         const pillars = await loadManagedSettings();
         setManagedSettings({ pillars });
+        setManagedSettingsLoaded(true);
       } catch (error) {
         console.error("Unable to load managed book settings.", error);
         setSettingError("Unable to load the current pillar and category settings.");
@@ -1152,15 +1200,25 @@ function BookModal({ book, onClose, onSaved }) {
   const allowedCategories = activePillar ? activePillar.categories.map((category) => category.name) : [];
 
   useEffect(() => {
+    if (!managedSettingsLoaded) return;
+
     if (!form.pillar) {
-      setForm((current) => ({ ...current, subcategory: "" }));
+      if (form.subcategory) {
+        setForm((current) => ({ ...current, subcategory: "" }));
+      }
       return;
     }
 
-    if (form.subcategory && !allowedCategories.includes(form.subcategory)) {
+    const selectedCategory = allowedCategories.find((category) =>
+      normalizeFilterValue(category) === normalizeFilterValue(form.subcategory)
+    );
+
+    if (selectedCategory && selectedCategory !== form.subcategory) {
+      setForm((current) => ({ ...current, subcategory: selectedCategory }));
+    } else if (form.subcategory && !selectedCategory) {
       setForm((current) => ({ ...current, subcategory: "" }));
     }
-  }, [form.pillar, form.subcategory, allowedCategories]);
+  }, [form.pillar, form.subcategory, allowedCategories, managedSettingsLoaded]);
 
   useEffect(() => {
     const scrollY = window.scrollY;
