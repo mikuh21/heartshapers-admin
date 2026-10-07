@@ -1,6 +1,7 @@
 /// <reference lib="deno.ns" />
 
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2.57.0";
+import { insertAdminAuditLog } from "../_shared/adminAudit.ts";
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
@@ -80,6 +81,15 @@ Deno.serve(async (req: Request): Promise<Response> => {
     console.log("Authenticated requester:", userData.user.email, "role:", requesterRole);
 
     if (requesterRole !== "super_admin") {
+      const auditClient = createClient(SUPABASE_URL, SERVICE_ROLE_KEY, {
+        auth: { persistSession: false, autoRefreshToken: false }
+      });
+      await insertAdminAuditLog(auditClient, {
+        action: "unauthorized_admin_action_attempt",
+        actorEmail: userData.user.email,
+        targetType: "admin_endpoint",
+        details: { requested_action: "admin_management", requester_role: requesterRole || "none" }
+      });
       console.error("Forbidden requester attempted admin management:", userData.user.email, "role:", requesterRole);
       return jsonResponse({ error: "You do not have permission to perform this action." }, 403);
     }
@@ -128,6 +138,13 @@ Deno.serve(async (req: Request): Promise<Response> => {
 
       const duplicateEmail = (existingUsers?.users || []).some((user: any) => user.email?.toLowerCase() === email.toLowerCase());
       if (duplicateEmail) {
+        await insertAdminAuditLog(adminClient, {
+          action: "administrator_creation_failed",
+          actorEmail: userData.user.email,
+          targetType: "administrator",
+          targetName: full_name,
+          details: { admin_email: email, failure_code: "EMAIL_ALREADY_EXISTS" }
+        });
         return jsonResponse({ error: "An account with this email already exists." }, 409);
       }
 
@@ -145,9 +162,24 @@ Deno.serve(async (req: Request): Promise<Response> => {
 
       if (error || !data?.user) {
         console.error("Failed to create admin user:", error?.message);
+        await insertAdminAuditLog(adminClient, {
+          action: "administrator_creation_failed",
+          actorEmail: userData.user.email,
+          targetType: "administrator",
+          targetName: full_name,
+          details: { failure_code: error?.code || "ADMIN_CREATE_FAILED" }
+        });
         return jsonResponse({ error: "Unable to create the administrator account. Please try again." }, 500);
       }
 
+      await insertAdminAuditLog(adminClient, {
+        action: "administrator_created",
+        actorEmail: userData.user.email,
+        targetType: "administrator",
+        targetId: data.user.id,
+        targetName: full_name,
+        details: { admin_email: email }
+      });
       return jsonResponse({ admin: normalizeUser(data.user) }, 201);
     }
 
@@ -162,11 +194,26 @@ Deno.serve(async (req: Request): Promise<Response> => {
       const { data: existingUserData, error: existingUserError } = await adminClient.auth.admin.getUserById(userId);
       if (existingUserError || !existingUserData?.user) {
         console.error("Unable to find target admin user:", existingUserError?.message);
+        await insertAdminAuditLog(adminClient, {
+          action: "administrator_status_change_failed",
+          actorEmail: userData.user.email,
+          targetType: "administrator",
+          targetId: userId,
+          details: { requested_status: disabled ? "disabled" : "enabled", failure_code: "ADMIN_NOT_FOUND" }
+        });
         return jsonResponse({ error: "Unable to find that administrator account." }, 404);
       }
 
       const targetRole = getTrustedRole(existingUserData.user);
       if (targetRole !== "admin") {
+        await insertAdminAuditLog(adminClient, {
+          action: "administrator_status_change_failed",
+          actorEmail: userData.user.email,
+          targetType: "administrator",
+          targetId: userId,
+          targetName: existingUserData.user.user_metadata?.full_name || existingUserData.user.email || null,
+          details: { requested_status: disabled ? "disabled" : "enabled", failure_code: "TARGET_NOT_ADMIN" }
+        });
         return jsonResponse({ error: "Only admin accounts can be managed here." }, 403);
       }
 
@@ -176,9 +223,25 @@ Deno.serve(async (req: Request): Promise<Response> => {
 
       if (error || !data?.user) {
         console.error("Failed to update admin status:", error?.message);
+        await insertAdminAuditLog(adminClient, {
+          action: "administrator_status_change_failed",
+          actorEmail: userData.user.email,
+          targetType: "administrator",
+          targetId: userId,
+          targetName: existingUserData.user.user_metadata?.full_name || existingUserData.user.email || null,
+          details: { requested_status: disabled ? "disabled" : "enabled", failure_code: error?.code || "STATUS_UPDATE_FAILED" }
+        });
         return jsonResponse({ error: "Unable to update this administrator account right now." }, 500);
       }
 
+      await insertAdminAuditLog(adminClient, {
+        action: disabled ? "administrator_disabled" : "administrator_enabled",
+        actorEmail: userData.user.email,
+        targetType: "administrator",
+        targetId: userId,
+        targetName: data.user.user_metadata?.full_name || data.user.email || null,
+        details: { status: disabled ? "disabled" : "enabled" }
+      });
       return jsonResponse({ admin: normalizeUser(data.user) });
     }
 

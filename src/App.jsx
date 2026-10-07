@@ -25,6 +25,7 @@ import {
   Receipt
 } from "lucide-react";
 import { supabase, COVER_BUCKET, PDF_BUCKET } from "./lib/supabase";
+import { logAdminAction } from "./lib/adminAudit";
 import {
   getAuthRole,
   isAdminUser,
@@ -54,7 +55,6 @@ const EMPTY_BOOK = {
   is_locked: false
 };
 
-const DEFAULT_PILLAR_OPTIONS = ["Family", "Work", "Ministry"];
 const DEFAULT_CATEGORY_OPTIONS = {
   Family: ["Devotionals", "Discipleship"],
   Work: ["Leadership"],
@@ -115,12 +115,17 @@ async function saveUploadSettingsToSupabase(settings) {
   const { data: userData } = await supabase.auth.getUser();
   const { error } = await supabase
     .from("app_settings")
-    .upsert({
-      key: "upload_settings",
-      value: normalized,
-      updated_at: new Date().toISOString(),
-      updated_by: userData.user?.id || null
-    });
+    .upsert(
+      {
+        key: "upload_settings",
+        value: normalized,
+        updated_at: new Date().toISOString(),
+        updated_by: userData.user?.id || null
+      },
+      {
+        onConflict: "key"
+      }
+    );
 
   if (error) throw error;
   return normalized;
@@ -168,17 +173,6 @@ async function loadAdminLogs() {
   return data || [];
 }
 
-async function recordAdminLog(action, details = {}) {
-  const { data: userData } = await supabase.auth.getUser();
-  const { error } = await supabase.from("admin_logs").insert({
-    action,
-    details,
-    admin_email: userData.user?.email || null
-  });
-
-  if (error) throw error;
-}
-
 function formatAdminLogAction(action = "") {
   return String(action)
     .split("_")
@@ -202,6 +196,29 @@ function formatAdminLogDetails(log) {
       lines.push(`Acceptable file types: ${details.acceptable_file_types.map((type) => normalizeUploadType(type).toUpperCase()).join(", ")}`);
     }
     return lines;
+  }
+
+  if (Array.isArray(details.changed_fields) && details.changed_fields.length > 0) {
+    lines.push(`Changed: ${details.changed_fields.join(", ")}`);
+  }
+  if (details.price !== undefined && details.previous_price === undefined) {
+    lines.push(`Price: ${formatCurrency(details.price)}`);
+  }
+  if (details.previous_price !== undefined && details.price !== undefined) {
+    lines.push(`Price: ${formatCurrency(details.previous_price)} → ${formatCurrency(details.price)}`);
+  }
+  if (details.is_locked !== undefined) lines.push(`Access: ${details.is_locked ? "Locked" : "Unlocked"}`);
+  if (details.status) lines.push(`Status: ${details.status}`);
+  if (details.amount !== undefined) lines.push(`Amount: ${formatCurrency(details.amount)}`);
+  if (details.customer_id) lines.push(`Customer ID: ${details.customer_id}`);
+  if (details.reference_number) lines.push(`Reference: ${details.reference_number}`);
+  if (details.rejection_reason) lines.push(`Reason: ${details.rejection_reason}`);
+  if (details.failure_code) lines.push(`Failure code: ${details.failure_code}`);
+  if (details.file_type) lines.push(`File type: ${details.file_type}`);
+  if (details.operation) lines.push(`Operation: ${details.operation}`);
+  if (details.target_type || details.target_name || details.target_id) {
+    const target = details.target_name || details.target_id || details.target_type;
+    lines.push(`Target: ${target}${details.target_id && details.target_name ? ` (${details.target_id})` : ""}`);
   }
 
   const pillarName = isCategoryAction
@@ -550,12 +567,29 @@ function Login() {
 
     const role = getAuthRole(data.user);
     if (!isAdminWebUser(data.user)) {
+      try {
+        await supabase.functions.invoke(
+          import.meta.env.VITE_ADMIN_USER_FUNCTION || "admin-user-management",
+          { body: { action: "admin_login_access_denied" } }
+        );
+      } catch (auditError) {
+        console.error("Admin access-denied audit request failed.", {
+          code: auditError.code || "AUDIT_REQUEST_FAILED"
+        });
+      }
       await supabase.auth.signOut();
       setError("This account does not have permission to access Heartshapers Admin.");
       setBusy(false);
       return;
     }
 
+    await logAdminAction({
+      action: "admin_login",
+      targetType: "admin_account",
+      targetId: data.user.id,
+      targetName: data.user.email || null,
+      details: { role: getAuthRole(data.user) }
+    });
     setBusy(false);
   }
 
@@ -625,7 +659,17 @@ function AdminApp({ session }) {
   const canManageAdmins = isSuperAdmin(session.user);
 
   async function logout() {
-    return supabase.auth.signOut();
+    const { data: sessionData } = await supabase.auth.getSession();
+    const result = await supabase.auth.signOut();
+    if (!result.error && sessionData.session?.access_token) {
+      await logAdminAction({
+        action: "admin_logout",
+        targetType: "admin_account",
+        targetId: session.user.id,
+        targetName: session.user.email || null
+      }, sessionData.session.access_token);
+    }
+    return result;
   }
 
   return (
@@ -902,11 +946,24 @@ function Books() {
   async function deleteBook(book) {
     const { error } = await supabase.from("books").delete().eq("id", book.id);
     if (error) {
+      await logAdminAction({
+        action: "book_delete_failed",
+        targetType: "book",
+        targetId: book.id,
+        targetName: book.title || "Untitled",
+        details: { failure_code: error.code || "BOOK_DELETE_FAILED" }
+      });
       setError(error.message);
       return false;
     }
 
     setBooks((current) => current.filter((item) => item.id !== book.id));
+    await logAdminAction({
+      action: "book_deleted",
+      targetType: "book",
+      targetId: book.id,
+      targetName: book.title || "Untitled"
+    });
     showToast("Book deleted successfully.", "error");
     return true;
   }
@@ -1181,6 +1238,18 @@ function BookModal({ book, onClose, onSaved }) {
 
     if (error) throw error;
 
+    const isCover = folder === "covers";
+    await logAdminAction({
+      action: isCover ? "book_cover_uploaded" : "book_pdf_uploaded",
+      targetType: "book",
+      targetId: form.id,
+      targetName: form.title,
+      details: {
+        file_type: file.type || (isCover ? "image/unknown" : "application/pdf"),
+        replaced: Boolean(isCover ? form.cover_image_url : form.pdf_url)
+      }
+    });
+
     const { data } = supabase.storage.from(bucket).getPublicUrl(path);
     return data.publicUrl;
   }
@@ -1277,6 +1346,27 @@ function BookModal({ book, onClose, onSaved }) {
           );
         }
 
+        const changedFields = Object.keys(payload).filter((key) =>
+          JSON.stringify(payload[key]) !== JSON.stringify(book?.[key] ?? (key === "price" ? 0 : key === "is_locked" ? false : null))
+        );
+        const priceChanged = changedFields.includes("price");
+        const lockChanged = changedFields.includes("is_locked");
+        const action = changedFields.length === 1 && priceChanged
+          ? "book_price_updated"
+          : changedFields.length === 1 && lockChanged
+            ? (payload.is_locked ? "book_locked" : "book_unlocked")
+            : "book_updated";
+        await logAdminAction({
+          action,
+          targetType: "book",
+          targetId: form.id,
+          targetName: payload.title,
+          details: {
+            changed_fields: changedFields,
+            ...(priceChanged ? { previous_price: book?.price || 0, price: payload.price } : {}),
+            ...(lockChanged ? { is_locked: payload.is_locked } : {})
+          }
+        });
         await onSaved("Book updated successfully.");
         return;
       }
@@ -1297,8 +1387,22 @@ function BookModal({ book, onClose, onSaved }) {
         throw result.error;
       }
 
+      await logAdminAction({
+        action: "book_created",
+        targetType: "book",
+        targetId: result.data.id,
+        targetName: payload.title,
+        details: { changed_fields: Object.keys(payload), price: payload.price, is_locked: payload.is_locked }
+      });
       await onSaved("Book added successfully.");
     } catch (err) {
+      await logAdminAction({
+        action: form.id ? "book_update_failed" : "book_create_failed",
+        targetType: "book",
+        targetId: form.id,
+        targetName: form.title || null,
+        details: { operation: form.id ? "update" : "create", failure_code: err.code || "BOOK_SAVE_FAILED" }
+      });
       console.error("Book save error:", err);
       setError(err.message || "Unable to update the book. Please try again.");
     } finally {
@@ -1587,7 +1691,16 @@ function UsersPage({ canManageUsers }) {
                     <td>{formatDate(user.created_at)}</td>
                     <td>
                       <div className="user-actions">
-                        <button className="secondary-btn small" onClick={() => setSelectedUser(user)}>
+                        <button className="secondary-btn small" onClick={async () => {
+                          await logAdminAction({
+                            action: "user_details_viewed",
+                            targetType: "user",
+                            targetId: user.id,
+                            targetName: user.full_name || user.email,
+                            details: { user_email: user.email }
+                          });
+                          setSelectedUser(user);
+                        }}>
                           View User
                         </button>
                         <button
@@ -2131,6 +2244,13 @@ function PaymentsPage({ canManagePayments }) {
     setSelected(payment);
     setNote(payment.admin_notes || "");
     setProofUrl("");
+    await logAdminAction({
+      action: "payment_submission_viewed",
+      targetType: "payment_submission",
+      targetId: payment.id,
+      targetName: payment.books?.title || null,
+      details: { customer_id: payment.user_id, amount: payment.amount }
+    });
     const { data, error: signedUrlError } = await supabase.storage
       .from(PAYMENT_PROOF_BUCKET)
       .createSignedUrl(payment.proof_image_url, 3600);
@@ -2157,6 +2277,13 @@ function PaymentsPage({ canManagePayments }) {
       setSelected(null);
       showToast(action === "verify" ? "Payment verified successfully." : "Payment rejected.", "success");
     } catch (reviewError) {
+      await logAdminAction({
+        action: action === "verify" ? "payment_verification_failed" : "payment_rejection_failed",
+        targetType: "payment_submission",
+        targetId: selected.id,
+        targetName: selected.books?.title || null,
+        details: { failure_code: reviewError.code || "PAYMENT_REVIEW_FAILED" }
+      });
       showToast(reviewError.message || "Unable to review this payment.", "error");
     } finally {
       setBusy(false);
@@ -2191,9 +2318,8 @@ function PaymentsPage({ canManagePayments }) {
 
 function SettingsPage() {
   const { showToast } = useToast();
-  const [message, setMessage] = useState("");
+  const [settingsTab, setSettingsTab] = useState("general");
   const [loading, setLoading] = useState(true);
-  const [error, setError] = useState("");
   const [pillars, setPillars] = useState([]);
   const [pillarName, setPillarName] = useState("");
   const [editingPillarId, setEditingPillarId] = useState(null);
@@ -2207,10 +2333,41 @@ function SettingsPage() {
   const [paymentSettings, setPaymentSettings] = useState(DEFAULT_PAYMENT_SETTINGS);
   const [paymentSettingsLoading, setPaymentSettingsLoading] = useState(true);
   const [paymentQrPreview, setPaymentQrPreview] = useState("");
+  const [paymentQrFileName, setPaymentQrFileName] = useState("");
+  const adminLogsRequestRef = useRef(null);
+
+  async function refreshAdminLogs() {
+    if (!adminLogsRequestRef.current) {
+      adminLogsRequestRef.current = loadAdminLogs();
+    }
+
+    try {
+      const nextLogs = await adminLogsRequestRef.current;
+      setAdminLogs(nextLogs);
+      return nextLogs;
+    } finally {
+      adminLogsRequestRef.current = null;
+    }
+  }
+
+  function handleSettingsTabKeyDown(event) {
+    const tabs = Array.from(event.currentTarget.parentElement.querySelectorAll('[role="tab"]'));
+    const currentIndex = tabs.indexOf(event.currentTarget);
+    let nextIndex;
+
+    if (event.key === "ArrowRight") nextIndex = (currentIndex + 1) % tabs.length;
+    else if (event.key === "ArrowLeft") nextIndex = (currentIndex - 1 + tabs.length) % tabs.length;
+    else if (event.key === "Home") nextIndex = 0;
+    else if (event.key === "End") nextIndex = tabs.length - 1;
+    else return;
+
+    event.preventDefault();
+    tabs[nextIndex].focus();
+    setSettingsTab(tabs[nextIndex].dataset.settingsTab);
+  }
 
   async function loadSettings() {
     setLoading(true);
-    setError("");
 
     try {
       await ensureDefaultManagedSettings();
@@ -2223,7 +2380,7 @@ function SettingsPage() {
         setEditingPillarId(null);
       }
     } catch (err) {
-      setError(err.message || "Unable to load the current book categories.");
+      showToast(err.message || "Unable to load the current book categories.", "error");
     } finally {
       setLoading(false);
     }
@@ -2237,16 +2394,15 @@ function SettingsPage() {
     async function loadAdditionalSettings() {
       setUploadSettingsLoading(true);
       try {
-        const [nextUploadSettings, nextAdminLogs, nextPaymentSettings] = await Promise.all([loadUploadSettings(), loadAdminLogs(), loadPaymentSettings()]);
+        const [nextUploadSettings, nextPaymentSettings] = await Promise.all([loadUploadSettings(), loadPaymentSettings()]);
         setUploadSettings(nextUploadSettings);
-        setAdminLogs(nextAdminLogs);
         setPaymentSettings(nextPaymentSettings);
         if (nextPaymentSettings.qr_image_url) {
           const { data } = await supabase.storage.from(PAYMENT_PROOF_BUCKET).createSignedUrl(nextPaymentSettings.qr_image_url, 3600);
           setPaymentQrPreview(data?.signedUrl || "");
         }
       } catch (err) {
-        setError(err.message || "Unable to load upload settings and admin logs.");
+        showToast(err.message || "Unable to load settings.", "error");
       } finally {
         setUploadSettingsLoading(false);
         setPaymentSettingsLoading(false);
@@ -2256,25 +2412,65 @@ function SettingsPage() {
     loadAdditionalSettings();
   }, []);
 
-  async function resetPassword() {
-    const { data } = await supabase.auth.getUser();
-    const email = data.user?.email;
-    if (!email) return;
+  useEffect(() => {
+    if (settingsTab !== "logs") return;
+    let active = true;
+    refreshAdminLogs().catch((err) => {
+      if (active) showToast(err.message || "Unable to load admin logs.", "error");
+    });
 
-    const { error } = await supabase.auth.resetPasswordForEmail(email);
-    setMessage(error ? error.message : "Password reset email sent.");
+    return () => {
+      active = false;
+    };
+  }, [settingsTab]);
+
+  async function resetPassword() {
+    try {
+      const { data, error: userError } = await supabase.auth.getUser();
+      if (userError) throw userError;
+      const email = data.user?.email;
+      if (!email) throw new Error("Unable to find the current admin email.");
+
+      const { error } = await supabase.auth.resetPasswordForEmail(email);
+      if (error) throw error;
+      await logAdminAction({
+        action: "password_reset_requested",
+        targetType: "admin_account",
+        targetId: data.user.id,
+        targetName: email
+      });
+      showToast("Password reset email sent.", "success");
+    } catch (err) {
+      await logAdminAction({
+        action: "password_reset_request_failed",
+        targetType: "admin_account",
+        details: { failure_code: err.code || "RESET_REQUEST_FAILED" }
+      });
+      showToast(err.message || "Unable to send the password reset email.", "error");
+    }
   }
 
   async function saveUploadSettings() {
     setUploadSettingsLoading(true);
     try {
       const normalized = await saveUploadSettingsToSupabase(uploadSettings);
-      await recordAdminLog("upload_settings_updated", normalized);
+      await logAdminAction({
+        action: "upload_settings_updated",
+        targetType: "app_setting",
+        targetId: "upload_settings",
+        targetName: "Upload Settings",
+        details: normalized
+      });
       setUploadSettings(normalized);
-      setAdminLogs(await loadAdminLogs());
       showToast("Upload settings saved successfully.", "success");
     } catch (err) {
-      setError(err.message || "Unable to save upload settings.");
+      await logAdminAction({
+        action: "upload_settings_update_failed",
+        targetType: "app_setting",
+        targetId: "upload_settings",
+        targetName: "Upload Settings",
+        details: { failure_code: err.code || "SETTINGS_UPDATE_FAILED" }
+      });
       showToast(err.message || "Unable to save upload settings.", "error");
     } finally {
       setUploadSettingsLoading(false);
@@ -2285,10 +2481,24 @@ function SettingsPage() {
     setPaymentSettingsLoading(true);
     try {
       const normalized = await savePaymentSettingsToSupabase(paymentSettings);
+      const changedFields = Object.keys(normalized).filter((key) => normalized[key] !== paymentSettings[key]);
+      await logAdminAction({
+        action: "payment_settings_updated",
+        targetType: "app_setting",
+        targetId: "payment_settings",
+        targetName: "Payment Settings",
+        details: { changed_fields: changedFields }
+      });
       setPaymentSettings(normalized);
       showToast("Payment settings saved successfully.", "success");
     } catch (err) {
-      setError(err.message || "Unable to save payment settings.");
+      await logAdminAction({
+        action: "payment_settings_update_failed",
+        targetType: "app_setting",
+        targetId: "payment_settings",
+        targetName: "Payment Settings",
+        details: { failure_code: err.code || "SETTINGS_UPDATE_FAILED" }
+      });
       showToast(err.message || "Unable to save payment settings.", "error");
     } finally {
       setPaymentSettingsLoading(false);
@@ -2303,12 +2513,26 @@ function SettingsPage() {
       const path = `settings/${crypto.randomUUID()}-${file.name.toLowerCase().replace(/[^a-z0-9._-]/g, "-")}`;
       const { error: uploadError } = await supabase.storage.from(PAYMENT_PROOF_BUCKET).upload(path, file, { upsert: false, contentType: file.type });
       if (uploadError) throw uploadError;
+      await logAdminAction({
+        action: "payment_qr_uploaded",
+        targetType: "app_setting",
+        targetId: "payment_settings",
+        targetName: "GCash QR Code",
+        details: { file_type: file.type || "image/unknown" }
+      });
       const { data } = await supabase.storage.from(PAYMENT_PROOF_BUCKET).createSignedUrl(path, 3600);
       setPaymentQrPreview(data?.signedUrl || "");
       setPaymentSettings((current) => ({ ...current, qr_image_url: path }));
       showToast("QR image uploaded. Save payment settings to apply it.", "success");
     } catch (err) {
-      setError(err.message || "Unable to upload the payment QR.");
+      await logAdminAction({
+        action: "payment_qr_upload_failed",
+        targetType: "app_setting",
+        targetId: "payment_settings",
+        targetName: "GCash QR Code",
+        details: { failure_code: err.code || "QR_UPLOAD_FAILED", file_type: file.type || "image/unknown" }
+      });
+      showToast(err.message || "Unable to upload the payment QR.", "error");
     } finally {
       setPaymentSettingsLoading(false);
     }
@@ -2319,12 +2543,12 @@ function SettingsPage() {
     const trimmed = pillarName.trim();
 
     if (!trimmed) {
-      setError("Pillar name is required.");
+      showToast("Pillar name is required.", "error");
       return;
     }
 
     if (pillars.some((pillar) => pillar.name.toLowerCase() === trimmed.toLowerCase() && pillar.id !== editingPillarId)) {
-      setError("A pillar with this name already exists. Duplicate names are not allowed.");
+      showToast("A pillar with this name already exists. Duplicate names are not allowed.", "error");
       return;
     }
 
@@ -2353,24 +2577,37 @@ function SettingsPage() {
           if (updateBookError) throw updateBookError;
         }
 
-        await recordAdminLog("pillar_updated", { id: editingPillarId, name: trimmed, previous_name: originalPillar.name });
+        await logAdminAction({
+          action: "pillar_updated",
+          targetType: "pillar",
+          targetId: editingPillarId,
+          targetName: trimmed,
+          details: { id: editingPillarId, name: trimmed, previous_name: originalPillar.name }
+        });
         showToast("Pillar updated successfully.", "success");
       } else {
-        const { error } = await supabase
+        const { data, error } = await supabase
           .from("pillars")
-          .insert({ name: trimmed });
+          .insert({ name: trimmed })
+          .select("id")
+          .single();
 
         if (error) throw error;
-        await recordAdminLog("pillar_created", { name: trimmed });
+        await logAdminAction({ action: "pillar_created", targetType: "pillar", targetId: data.id, targetName: trimmed, details: { name: trimmed } });
         showToast("Pillar added successfully.", "success");
       }
 
       setPillarName("");
       setEditingPillarId(null);
-      setError("");
       await loadSettings();
     } catch (err) {
-      setError(err.message || "Unable to save the pillar right now.");
+      await logAdminAction({
+        action: editingPillarId ? "pillar_update_failed" : "pillar_create_failed",
+        targetType: "pillar",
+        targetId: editingPillarId,
+        targetName: trimmed,
+        details: { failure_code: err.code || "PILLAR_SAVE_FAILED" }
+      });
       showToast(err.message || "Unable to save the pillar right now.", "error");
     }
   }
@@ -2380,24 +2617,24 @@ function SettingsPage() {
     const trimmed = categoryName.trim();
 
     if (!trimmed) {
-      setError("Category name is required.");
+      showToast("Category name is required.", "error");
       return;
     }
 
     if (!categoryPillarId) {
-      setError("Please choose a pillar first.");
+      showToast("Please choose a pillar first.", "error");
       return;
     }
 
     const selectedPillar = pillars.find((pillar) => pillar.id === categoryPillarId);
     if (!selectedPillar) {
-      setError("Please choose a valid pillar.");
+      showToast("Please choose a valid pillar.", "error");
       return;
     }
 
     const categoryMatches = (selectedPillar.categories || []).filter((category) => category.id !== editingCategoryId);
     if (categoryMatches.some((category) => category.name.toLowerCase() === trimmed.toLowerCase())) {
-      setError("A category with this name already exists for the selected pillar.");
+      showToast("A category with this name already exists for the selected pillar.", "error");
       return;
     }
 
@@ -2429,24 +2666,43 @@ function SettingsPage() {
           if (updateBooksError) throw updateBooksError;
         }
 
-        await recordAdminLog("category_updated", { id: editingCategoryId, name: trimmed, previous_name: originalCategory.name, pillar_id: selectedPillar.id, pillar_name: selectedPillar.name });
+        await logAdminAction({
+          action: "category_updated",
+          targetType: "category",
+          targetId: editingCategoryId,
+          targetName: trimmed,
+          details: { id: editingCategoryId, name: trimmed, previous_name: originalCategory.name, pillar_id: selectedPillar.id, pillar_name: selectedPillar.name }
+        });
         showToast("Category updated successfully.", "success");
       } else {
-        const { error } = await supabase
+        const { data, error } = await supabase
           .from("categories")
-          .insert({ pillar_id: categoryPillarId, name: trimmed });
+          .insert({ pillar_id: categoryPillarId, name: trimmed })
+          .select("id")
+          .single();
 
         if (error) throw error;
-        await recordAdminLog("category_created", { name: trimmed, pillar_id: categoryPillarId, pillar_name: selectedPillar.name });
+        await logAdminAction({
+          action: "category_created",
+          targetType: "category",
+          targetId: data.id,
+          targetName: trimmed,
+          details: { name: trimmed, pillar_id: categoryPillarId, pillar_name: selectedPillar.name }
+        });
         showToast("Category added successfully.", "success");
       }
 
       setCategoryName("");
       setEditingCategoryId(null);
-      setError("");
       await loadSettings();
     } catch (err) {
-      setError(err.message || "Unable to save the category right now.");
+      await logAdminAction({
+        action: editingCategoryId ? "category_update_failed" : "category_create_failed",
+        targetType: "category",
+        targetId: editingCategoryId,
+        targetName: trimmed,
+        details: { failure_code: err.code || "CATEGORY_SAVE_FAILED", pillar_id: categoryPillarId }
+      });
       showToast(err.message || "Unable to save the category right now.", "error");
     }
   }
@@ -2480,7 +2736,7 @@ function SettingsPage() {
 
         if (pillarDeleteError) throw pillarDeleteError;
 
-        await recordAdminLog("pillar_deleted", { id: target.id, name: target.name });
+        await logAdminAction({ action: "pillar_deleted", targetType: "pillar", targetId: target.id, targetName: target.name });
         showToast("Pillar deleted successfully.", "success");
       }
 
@@ -2504,16 +2760,27 @@ function SettingsPage() {
 
         if (error) throw error;
 
-        await recordAdminLog("category_deleted", { id: target.id, name: target.name, pillar_id: target.pillar_id, pillar_name: targetPillar?.name || "" });
+        await logAdminAction({
+          action: "category_deleted",
+          targetType: "category",
+          targetId: target.id,
+          targetName: target.name,
+          details: { pillar_id: target.pillar_id, pillar_name: targetPillar?.name || "" }
+        });
         showToast("Category deleted successfully.", "success");
       }
 
       setDeleteTarget(null);
-      setError("");
       await loadSettings();
       return true;
     } catch (err) {
-      setError(err.message || "Unable to delete this item right now.");
+      await logAdminAction({
+        action: `${target.type}_delete_failed`,
+        targetType: target.type,
+        targetId: target.id,
+        targetName: target.name,
+        details: { failure_code: err.code || "SETTINGS_DELETE_FAILED" }
+      });
       showToast(err.message || "Unable to delete this item right now.", "error");
       return false;
     }
@@ -2526,6 +2793,52 @@ function SettingsPage() {
       <h3>Settings</h3>
       <p className="muted">Manage the Book Categories used throughout the admin app.</p>
 
+      <div className="settings-tabs" role="tablist" aria-label="Settings sections">
+        <button
+          type="button"
+          id="settings-tab-general"
+          className={`settings-tab${settingsTab === "general" ? " active" : ""}`}
+          role="tab"
+          aria-selected={settingsTab === "general"}
+          aria-controls="settings-panel-general"
+          tabIndex={settingsTab === "general" ? 0 : -1}
+          data-settings-tab="general"
+          onClick={() => setSettingsTab("general")}
+          onKeyDown={handleSettingsTabKeyDown}
+        >
+          General
+        </button>
+        <button
+          type="button"
+          id="settings-tab-payment"
+          className={`settings-tab${settingsTab === "payment" ? " active" : ""}`}
+          role="tab"
+          aria-selected={settingsTab === "payment"}
+          aria-controls="settings-panel-payment"
+          tabIndex={settingsTab === "payment" ? 0 : -1}
+          data-settings-tab="payment"
+          onClick={() => setSettingsTab("payment")}
+          onKeyDown={handleSettingsTabKeyDown}
+        >
+          Payment
+        </button>
+        <button
+          type="button"
+          id="settings-tab-logs"
+          className={`settings-tab${settingsTab === "logs" ? " active" : ""}`}
+          role="tab"
+          aria-selected={settingsTab === "logs"}
+          aria-controls="settings-panel-logs"
+          tabIndex={settingsTab === "logs" ? 0 : -1}
+          data-settings-tab="logs"
+          onClick={() => setSettingsTab("logs")}
+          onKeyDown={handleSettingsTabKeyDown}
+        >
+          Logs
+        </button>
+      </div>
+
+      <div className="settings-tab-panel" id="settings-panel-general" role="tabpanel" aria-labelledby="settings-tab-general" tabIndex={0} hidden={settingsTab !== "general"}>
       <div className="setting-row">
         <div>
           <strong>Change password</strong>
@@ -2533,9 +2846,6 @@ function SettingsPage() {
         </div>
         <button className="secondary-btn" onClick={resetPassword}>Reset Password</button>
       </div>
-
-      {message && <div className="success-box">{message}</div>}
-      {error && <div className="error-box">{error}</div>}
 
       <div className="settings-section">
         <div className="settings-section-header">
@@ -2703,7 +3013,9 @@ function SettingsPage() {
           </div>
         </div>
       </div>
+      </div>
 
+      <div className="settings-tab-panel" id="settings-panel-payment" role="tabpanel" aria-labelledby="settings-tab-payment" tabIndex={0} hidden={settingsTab !== "payment"}>
       <div className="settings-section">
         <div className="settings-section-header"><h4>PAYMENT SETTINGS</h4></div>
         <div className="settings-subcard">
@@ -2715,13 +3027,37 @@ function SettingsPage() {
             <label>Payment instructions</label>
             <textarea rows={3} value={paymentSettings.instructions} onChange={(event) => setPaymentSettings((current) => ({ ...current, instructions: event.target.value }))} />
             <label>GCash QR code</label>
-            <input type="file" accept="image/*" onChange={uploadPaymentQr} disabled={paymentSettingsLoading} />
+            <div className="settings-file-control">
+              <input
+                className="settings-file-input"
+                id="payment-qr-upload"
+                type="file"
+                accept="image/*"
+                onChange={(event) => {
+                  setPaymentQrFileName(event.target.files?.[0]?.name || "");
+                  uploadPaymentQr(event);
+                }}
+                disabled={paymentSettingsLoading}
+              />
+              <label
+                className={`secondary-btn settings-file-button${paymentSettingsLoading ? " disabled" : ""}`}
+                htmlFor="payment-qr-upload"
+                aria-disabled={paymentSettingsLoading}
+              >
+                Choose File
+              </label>
+              <span className="settings-file-name" aria-live="polite">
+                {paymentQrFileName || "No file chosen"}
+              </span>
+            </div>
             {paymentQrPreview ? <img className="settings-qr-preview" src={paymentQrPreview} alt="Configured GCash QR" /> : <div className="field-hint">No QR code is configured yet.</div>}
             <div className="settings-form-actions"><button type="button" className="primary-btn" onClick={savePaymentSettings} disabled={paymentSettingsLoading}>Save Payment Settings</button></div>
           </div>
         </div>
       </div>
+      </div>
 
+      <div className="settings-tab-panel" id="settings-panel-logs" role="tabpanel" aria-labelledby="settings-tab-logs" tabIndex={0} hidden={settingsTab !== "logs"}>
       <div className="settings-section">
         <div className="settings-section-header">
           <h4>ADMIN LOGS</h4>
@@ -2746,6 +3082,7 @@ function SettingsPage() {
           </div>
         )}
       </div>
+      </div>
 
       {deleteTarget && (
         <ConfirmModal
@@ -2763,7 +3100,6 @@ function SettingsPage() {
     </div>
   );
 }
-
 function LoadingScreen() {
   return <div className="loading-screen"><Loader2 className="spin" size={30} /> Loading...</div>;
 }

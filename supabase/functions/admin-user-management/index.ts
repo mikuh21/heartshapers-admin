@@ -1,6 +1,7 @@
 /// <reference lib="deno.ns" />
 
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2.57.0";
+import { insertAdminAuditLog } from "../_shared/adminAudit.ts";
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
@@ -140,6 +141,18 @@ Deno.serve(async (req: Request): Promise<Response> => {
 
     // Only admins and super admins can access this function
     if (!isAdminIdentity(user)) {
+      const auditClient = createClient(SUPABASE_URL, SERVICE_ROLE_KEY, {
+        auth: { persistSession: false, autoRefreshToken: false }
+      });
+      const attemptedBody = await req.clone().json().catch(() => ({}));
+      await insertAdminAuditLog(auditClient, {
+        action: attemptedBody?.action === "admin_login_access_denied"
+          ? "admin_login_access_denied"
+          : "unauthorized_admin_action_attempt",
+        actorEmail: user.email,
+        targetType: "admin_endpoint",
+        details: { requested_action: String(attemptedBody?.action || "unknown"), requester_role: role || "none" }
+      });
       console.error(
         "Forbidden user attempted access:",
         user.email,
@@ -260,6 +273,13 @@ Deno.serve(async (req: Request): Promise<Response> => {
 
         if (error || !data?.user) {
           const message = String(error?.message || "").toLowerCase();
+          await insertAdminAuditLog(adminClient, {
+            action: "user_creation_failed",
+            actorEmail: user.email,
+            targetType: "user",
+            targetName: fullName,
+            details: { user_email: email, failure_code: error?.code || "USER_CREATE_FAILED" }
+          });
           if (
             message.includes("already registered") ||
             message.includes("already exists") ||
@@ -317,9 +337,25 @@ Deno.serve(async (req: Request): Promise<Response> => {
         if (cleanupFailed) {
           console.error("Failed to clean up user after verification email failure.");
         }
+        await insertAdminAuditLog(adminClient, {
+          action: "user_creation_failed",
+          actorEmail: user.email,
+          targetType: "user",
+          targetId: createdUser.id,
+          targetName: fullName,
+          details: { failure_code: "VERIFICATION_EMAIL_FAILED", cleanup_failed: cleanupFailed }
+        });
         return jsonResponse({ error: "VERIFICATION_EMAIL_FAILED" }, 500);
       }
 
+      await insertAdminAuditLog(adminClient, {
+        action: "user_created",
+        actorEmail: user.email,
+        targetType: "user",
+        targetId: createdUser.id,
+        targetName: fullName,
+        details: { user_email: email }
+      });
       return jsonResponse({ user: normalizeUser(createdUser) }, 201);
     }
 
@@ -348,6 +384,13 @@ Deno.serve(async (req: Request): Promise<Response> => {
         );
 
       if (error || !data?.user) {
+        await insertAdminAuditLog(adminClient, {
+          action: "user_status_change_failed",
+          actorEmail: user.email,
+          targetType: "user",
+          targetId: userId,
+          details: { requested_status: disabled ? "disabled" : "enabled", failure_code: error?.code || "STATUS_UPDATE_FAILED" }
+        });
         console.error(
           "Failed to update user:",
           error?.message,
@@ -367,6 +410,15 @@ Deno.serve(async (req: Request): Promise<Response> => {
         "Successfully updated user status:",
         userId,
       );
+
+      await insertAdminAuditLog(adminClient, {
+        action: disabled ? "user_disabled" : "user_enabled",
+        actorEmail: user.email,
+        targetType: "user",
+        targetId: userId,
+        targetName: data.user.user_metadata?.full_name || data.user.email || null,
+        details: { status: disabled ? "disabled" : "enabled" }
+      });
 
       return jsonResponse({
         user: normalizeUser(data.user),
