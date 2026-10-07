@@ -107,6 +107,37 @@ export async function listUsers() {
   return users.map(normalizeUser);
 }
 
+export async function getBookUserAccess(bookId) {
+  const { data, error } = await supabase.functions.invoke(ADMIN_USERS_FUNCTION, {
+    body: { action: "book-access", bookId }
+  });
+
+  if (error || data?.error) {
+    throw new Error("Unable to load user access information.");
+  }
+
+  return {
+    book: data.book,
+    users: (data.users || []).map(normalizeUser),
+    purchasedUserIds: data.purchasedUserIds || [],
+    accessOverrides: data.accessOverrides || []
+  };
+}
+
+export async function updateBookUserAccess({ bookId, userId, accessStatus }) {
+  const { data, error } = await supabase.functions.invoke(ADMIN_USERS_FUNCTION, {
+    body: { action: "set-book-access", bookId, userId, accessStatus }
+  });
+
+  if (error || data?.error) {
+    throw new Error(data?.error === "Verified purchases cannot be changed here."
+      ? data.error
+      : "Unable to update user access.");
+  }
+
+  return data?.accessStatus;
+}
+
 export async function updateUserStatus(userId, disabled) {
   const { data, error } = await supabase.functions.invoke(ADMIN_USERS_FUNCTION, {
     body: {

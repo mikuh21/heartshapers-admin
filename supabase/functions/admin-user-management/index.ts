@@ -61,6 +61,50 @@ function normalizeUser(user: any) {
   };
 }
 
+async function listAllNormalUsers(adminClient: any) {
+  const normalUsers = [];
+  const perPage = 1000;
+  let page = 1;
+
+  while (true) {
+    const { data, error } = await adminClient.auth.admin.listUsers({ page, perPage });
+    if (error) throw error;
+
+    const pageUsers = data?.users || [];
+    normalUsers.push(...pageUsers.filter((user: any) =>
+      String(user?.app_metadata?.role || "user").trim().toLowerCase() === "user"
+    ));
+
+    if (pageUsers.length < perPage) break;
+    page += 1;
+  }
+
+  return normalUsers;
+}
+
+async function listAllRowsForBook(adminClient: any, table: string, columns: string, bookId: string) {
+  const rows: any[] = [];
+  const perPage = 1000;
+  let from = 0;
+
+  while (true) {
+    const { data, error } = await adminClient
+      .from(table)
+      .select(columns)
+      .eq("book_id", bookId)
+      .order("user_id", { ascending: true })
+      .range(from, from + perPage - 1);
+    if (error) throw error;
+
+    const pageRows = data || [];
+    rows.push(...pageRows);
+    if (pageRows.length < perPage) break;
+    from += perPage;
+  }
+
+  return rows;
+}
+
 Deno.serve(async (req: Request): Promise<Response> => {
   // Handle browser CORS preflight requests
   if (req.method === "OPTIONS") {
@@ -184,6 +228,100 @@ Deno.serve(async (req: Request): Promise<Response> => {
     const action = body?.action;
 
     console.log("Requested action:", action);
+
+    if (action === "book-access") {
+      const bookId = String(body?.bookId || "").trim();
+      if (!bookId) return jsonResponse({ error: "A book ID is required." }, 400);
+
+      const [{ data: book, error: bookError }, normalUsers] = await Promise.all([
+        adminClient.from("books").select("id, title, is_locked").eq("id", bookId).maybeSingle(),
+        listAllNormalUsers(adminClient)
+      ]);
+      if (bookError || !book) {
+        return jsonResponse({ error: "Unable to load user access information." }, 404);
+      }
+
+      const [purchases, overrides] = await Promise.all([
+        listAllRowsForBook(adminClient, "book_purchases", "user_id", bookId),
+        listAllRowsForBook(adminClient, "user_book_access", "user_id, access_status", bookId)
+      ]);
+
+      return jsonResponse({
+        book: { id: book.id, title: book.title, is_locked: Boolean(book.is_locked) },
+        users: normalUsers.map(normalizeUser),
+        purchasedUserIds: (purchases || []).map((purchase: any) => purchase.user_id),
+        accessOverrides: (overrides || []).map((override: any) => ({
+          user_id: override.user_id,
+          access_status: override.access_status
+        }))
+      });
+    }
+
+    if (action === "set-book-access") {
+      const bookId = String(body?.bookId || "").trim();
+      const userId = String(body?.userId || "").trim();
+      const accessStatus = String(body?.accessStatus || "").trim().toLowerCase();
+
+      if (!bookId || !userId || !["free", "locked"].includes(accessStatus)) {
+        return jsonResponse({ error: "A book, user, and valid access status are required." }, 400);
+      }
+
+      const [{ data: targetData, error: targetError }, { data: book, error: bookError }] = await Promise.all([
+        adminClient.auth.admin.getUserById(userId),
+        adminClient.from("books").select("id, title").eq("id", bookId).maybeSingle()
+      ]);
+      const targetUser = targetData?.user;
+      const targetRole = getRole(targetUser) || "user";
+      if (targetError || !targetUser || targetRole !== "user") {
+        return jsonResponse({ error: "Unable to update user access." }, 404);
+      }
+      if (bookError || !book) {
+        return jsonResponse({ error: "Unable to update user access." }, 404);
+      }
+
+      const { data: purchase, error: purchaseError } = await adminClient
+        .from("book_purchases")
+        .select("id")
+        .eq("user_id", userId)
+        .eq("book_id", bookId)
+        .maybeSingle();
+      if (purchaseError) {
+        return jsonResponse({ error: "Unable to update user access." }, 500);
+      }
+      if (purchase) {
+        return jsonResponse({ error: "Verified purchases cannot be changed here." }, 409);
+      }
+
+      const { error: updateError } = await adminClient
+        .from("user_book_access")
+        .upsert({
+          user_id: userId,
+          book_id: bookId,
+          access_status: accessStatus,
+          granted_by: user.id,
+          updated_at: new Date().toISOString()
+        }, { onConflict: "user_id,book_id" });
+
+      if (updateError) {
+        console.error("Unable to update per-user book access.", { code: updateError.code || "ACCESS_UPDATE_FAILED" });
+        return jsonResponse({ error: "Unable to update user access." }, 500);
+      }
+
+      await insertAdminAuditLog(adminClient, {
+        action: "book_user_access_updated",
+        actorEmail: user.email,
+        targetType: "book",
+        targetId: bookId,
+        targetName: book.title,
+        details: {
+          user_name: targetUser.user_metadata?.full_name || targetUser.email || "User",
+          user_email: targetUser.email || null,
+          status: accessStatus === "free" ? "Free" : "Locked"
+        }
+      });
+
+      return jsonResponse({ accessStatus });
+    }
 
     // LIST NORMAL MOBILE USERS
     if (action === "list") {

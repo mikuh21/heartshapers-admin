@@ -33,6 +33,8 @@ import {
   isSuperAdmin,
   listAdmins,
   listUsers,
+  getBookUserAccess,
+  updateBookUserAccess,
   createUser,
   createAdmin,
   updateAdminStatus,
@@ -937,6 +939,7 @@ function Books() {
   const [error, setError] = useState("");
   const [modal, setModal] = useState(null);
   const [selected, setSelected] = useState(null);
+  const [accessBook, setAccessBook] = useState(null);
   const [bookToDelete, setBookToDelete] = useState(null);
 
   async function loadBooks() {
@@ -1105,10 +1108,15 @@ function Books() {
                     <td>{book.pillar || "—"}</td>
                     <td>{book.subcategory || "—"}</td>
                     <td>
-                      <span className={`status ${book.is_locked ? "locked" : "free"}`}>
-                        {book.is_locked ? <Lock size={13} /> : <Unlock size={13} />}
-                        {book.is_locked ? "Locked" : "Free"}
-                      </span>
+                      <button
+                        type="button"
+                        className="icon-btn"
+                        title="View User Access"
+                        aria-label={`View user access for ${book.title || "Untitled"}`}
+                        onClick={() => setAccessBook(book)}
+                      >
+                        <Users size={17} />
+                      </button>
                     </td>
                     <td>{formatDate(book.created_at)}</td>
                     <td>
@@ -1140,6 +1148,9 @@ function Books() {
           }}
         />
       )}
+      {accessBook && (
+        <BookUserAccessModal book={accessBook} onClose={() => setAccessBook(null)} />
+      )}
       {bookToDelete && (
         <ConfirmModal
           title="Delete Book?"
@@ -1151,6 +1162,207 @@ function Books() {
         />
       )}
     </>
+  );
+}
+
+function BookUserAccessModal({ book, onClose }) {
+  const { showToast } = useToast();
+  const showToastRef = useRef(showToast);
+  showToastRef.current = showToast;
+  const [users, setUsers] = useState([]);
+  const [purchasedUserIds, setPurchasedUserIds] = useState(() => new Set());
+  const [accessOverrides, setAccessOverrides] = useState(() => new Map());
+  const [accessBook, setAccessBook] = useState(book);
+  const [search, setSearch] = useState("");
+  const [statusFilter, setStatusFilter] = useState("All");
+  const [updatingUserIds, setUpdatingUserIds] = useState(() => new Set());
+  const [loading, setLoading] = useState(true);
+  const [loadError, setLoadError] = useState(false);
+  const accessRequestRef = useRef(null);
+
+  useEffect(() => {
+    const scrollY = window.scrollY;
+    const bodyStyle = document.body.style;
+    const originalBodyStyles = {
+      overflow: bodyStyle.overflow,
+      paddingRight: bodyStyle.paddingRight,
+      position: bodyStyle.position,
+      top: bodyStyle.top,
+      width: bodyStyle.width
+    };
+    const scrollbarWidth = window.innerWidth - document.documentElement.clientWidth;
+
+    bodyStyle.overflow = "hidden";
+    bodyStyle.position = "fixed";
+    bodyStyle.top = `-${scrollY}px`;
+    bodyStyle.width = "100%";
+    if (scrollbarWidth > 0) bodyStyle.paddingRight = `${scrollbarWidth}px`;
+
+    return () => {
+      bodyStyle.overflow = originalBodyStyles.overflow;
+      bodyStyle.paddingRight = originalBodyStyles.paddingRight;
+      bodyStyle.position = originalBodyStyles.position;
+      bodyStyle.top = originalBodyStyles.top;
+      bodyStyle.width = originalBodyStyles.width;
+      window.scrollTo(0, scrollY);
+    };
+  }, []);
+
+  useEffect(() => {
+    let active = true;
+
+    async function loadAccess() {
+      setLoading(true);
+      setLoadError(false);
+      let request = accessRequestRef.current;
+      if (!request || request.bookId !== book.id) {
+        request = { bookId: book.id, promise: getBookUserAccess(book.id) };
+        accessRequestRef.current = request;
+      }
+
+      try {
+        const access = await request.promise;
+        if (!active) return;
+
+        setAccessBook(access.book);
+        setUsers(access.users);
+        setPurchasedUserIds(new Set(access.purchasedUserIds));
+        setAccessOverrides(new Map(access.accessOverrides.map((entry) => [entry.user_id, entry.access_status])));
+      } catch (error) {
+        console.error("Unable to load book user access.", { code: error.code || "ACCESS_LOAD_FAILED" });
+        if (active) {
+          setLoadError(true);
+          showToastRef.current("Unable to load user access information.", "error");
+        }
+      } finally {
+        if (active) setLoading(false);
+        if (accessRequestRef.current === request) accessRequestRef.current = null;
+      }
+    }
+
+    loadAccess();
+    return () => {
+      active = false;
+    };
+  }, [book.id]);
+
+  function getUserBookStatus(userId) {
+    if (purchasedUserIds.has(userId)) return "Paid";
+    const override = accessOverrides.get(userId);
+    if (override) return override === "free" ? "Free" : "Locked";
+    return (accessBook?.is_locked ?? book.is_locked) ? "Locked" : "Free";
+  }
+
+  async function changeUserBookStatus(user, nextStatus) {
+    if (purchasedUserIds.has(user.id) || updatingUserIds.has(user.id)) return;
+
+    setUpdatingUserIds((current) => new Set(current).add(user.id));
+    try {
+      const savedStatus = await updateBookUserAccess({
+        bookId: book.id,
+        userId: user.id,
+        accessStatus: nextStatus.toLowerCase()
+      });
+      setAccessOverrides((current) => new Map(current).set(user.id, savedStatus));
+      showToastRef.current("User access updated successfully.", "success");
+    } catch (error) {
+      showToastRef.current(error.message || "Unable to update user access.", "error");
+    } finally {
+      setUpdatingUserIds((current) => {
+        const next = new Set(current);
+        next.delete(user.id);
+        return next;
+      });
+    }
+  }
+
+  const normalizedSearch = search.trim().toLowerCase();
+  const visibleUsers = users.filter((user) => {
+    const matchesSearch = !normalizedSearch || `${user.full_name || ""} ${user.email || ""}`.toLowerCase().includes(normalizedSearch);
+    const matchesStatus = statusFilter === "All" || getUserBookStatus(user.id) === statusFilter;
+    return matchesSearch && matchesStatus;
+  });
+
+  return (
+    <div className="modal-backdrop">
+      <div className="modal user-access-modal" role="dialog" aria-modal="true" aria-labelledby="user-access-title">
+        <div className="modal-header">
+          <div>
+            <h3 id="user-access-title">User Access</h3>
+            <p className="muted">{accessBook?.title || book.title || "Untitled"}</p>
+          </div>
+          <button type="button" className="icon-btn" onClick={onClose} aria-label="Close user access">
+            <X size={20} />
+          </button>
+        </div>
+        <div className="user-access-content">
+          {loading ? (
+            <div className="empty-state small-empty"><Loader2 className="spin" size={18} /> Loading user access...</div>
+          ) : loadError ? (
+            <div className="empty-state small-empty">Access data is unavailable. Close and reopen this dialog to retry.</div>
+          ) : users.length === 0 ? (
+            <div className="empty-state small-empty">No registered users found.</div>
+          ) : (
+            <>
+              <div className="user-access-toolbar">
+                <div className="search-box user-access-search">
+                  <Search size={18} />
+                  <input
+                    type="search"
+                    value={search}
+                    onChange={(event) => setSearch(event.target.value)}
+                    placeholder="Search users..."
+                    aria-label="Search users by name or email"
+                  />
+                </div>
+                <div className="select-box user-access-filter">
+                  <select value={statusFilter} onChange={(event) => setStatusFilter(event.target.value)} aria-label="Filter users by book access status">
+                    {["All", "Locked", "Free", "Paid", "Added to Cart"].map((status) => <option key={status}>{status}</option>)}
+                  </select>
+                  <ChevronDown size={16} />
+                </div>
+              </div>
+              {visibleUsers.length === 0 ? (
+                <div className="empty-state small-empty">
+                  {statusFilter === "Added to Cart"
+                    ? "Added to Cart status is unavailable because no cart data source exists."
+                    : "No users match this search or status filter."}
+                </div>
+              ) : (
+              <div className="user-access-list" role="list">
+                <div className="user-access-row user-access-heading" aria-hidden="true">
+                  <span>User</span>
+                  <span>Email</span>
+                  <span>Status</span>
+                </div>
+                {visibleUsers.map((user) => {
+                const status = getUserBookStatus(user.id);
+                const isPaid = purchasedUserIds.has(user.id);
+                return (
+                  <div className="user-access-row" role="listitem" key={user.id}>
+                    <strong>{user.full_name || "Unnamed user"}</strong>
+                    <span className="user-access-email">{user.email || "—"}</span>
+                    <select
+                      className={`user-access-status-select status ${status.toLowerCase().replaceAll(" ", "-")}`}
+                      value={status}
+                      disabled={isPaid || updatingUserIds.has(user.id)}
+                      onChange={(event) => changeUserBookStatus(user, event.target.value)}
+                      aria-label={`Access status for ${user.full_name || user.email} for ${accessBook?.title || book.title}`}
+                    >
+                      <option value="Locked">Locked</option>
+                      <option value="Free">Free</option>
+                      <option value="Paid" disabled={!isPaid}>Paid</option>
+                    </select>
+                  </div>
+                );
+                })}
+              </div>
+              )}
+            </>
+          )}
+        </div>
+      </div>
+    </div>
   );
 }
 
