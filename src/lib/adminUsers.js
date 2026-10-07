@@ -112,7 +112,25 @@ export async function getBookUserAccess(bookId) {
     body: { action: "book-access", bookId }
   });
 
-  if (error || data?.error) {
+  if (error) {
+    const response = error.context;
+    let backendError = null;
+    if (response && typeof response.clone === "function") {
+      backendError = (await response.clone().json().catch(() => null))?.error || null;
+    }
+    console.error("User access Edge Function request failed.", {
+      status: response?.status || error.status || null,
+      code: error.code || error.name || "FUNCTION_REQUEST_FAILED",
+      message: backendError || error.message || "Unknown function error"
+    });
+    throw new Error("Unable to load user access information.");
+  }
+
+  if (data?.error) {
+    console.error("User access Edge Function returned an error.", {
+      code: data.code || "BOOK_ACCESS_FAILED",
+      message: data.error
+    });
     throw new Error("Unable to load user access information.");
   }
 

@@ -105,6 +105,16 @@ async function listAllRowsForBook(adminClient: any, table: string, columns: stri
   return rows;
 }
 
+function logBookAccessFailure(operation: string, table: string, error: any) {
+  console.error("Book access data request failed.", {
+    operation,
+    table,
+    code: error?.code || null,
+    message: error?.message || "Unknown backend error",
+    status: error?.status || error?.statusCode || null
+  });
+}
+
 Deno.serve(async (req: Request): Promise<Response> => {
   // Handle browser CORS preflight requests
   if (req.method === "OPTIONS") {
@@ -233,18 +243,41 @@ Deno.serve(async (req: Request): Promise<Response> => {
       const bookId = String(body?.bookId || "").trim();
       if (!bookId) return jsonResponse({ error: "A book ID is required." }, 400);
 
-      const [{ data: book, error: bookError }, normalUsers] = await Promise.all([
-        adminClient.from("books").select("id, title, is_locked").eq("id", bookId).maybeSingle(),
-        listAllNormalUsers(adminClient)
-      ]);
-      if (bookError || !book) {
+      let normalUsers;
+      try {
+        normalUsers = await listAllNormalUsers(adminClient);
+      } catch (error) {
+        logBookAccessFailure("list normal Auth users", "auth.users", error);
+        return jsonResponse({ error: "Unable to load user access information." }, 500);
+      }
+
+      const { data: book, error: bookError } = await adminClient
+        .from("books")
+        .select("id, title, is_locked")
+        .eq("id", bookId)
+        .maybeSingle();
+      if (bookError) {
+        logBookAccessFailure("read selected book", "books", bookError);
+        return jsonResponse({ error: "Unable to load user access information." }, 500);
+      }
+      if (!book) {
         return jsonResponse({ error: "Unable to load user access information." }, 404);
       }
 
-      const [purchases, overrides] = await Promise.all([
+      const [purchaseResult, overrideResult] = await Promise.allSettled([
         listAllRowsForBook(adminClient, "book_purchases", "user_id", bookId),
         listAllRowsForBook(adminClient, "user_book_access", "user_id, access_status", bookId)
       ]);
+      if (purchaseResult.status === "rejected") {
+        logBookAccessFailure("read purchases for selected book", "book_purchases", purchaseResult.reason);
+        return jsonResponse({ error: "Unable to load user access information." }, 500);
+      }
+      if (overrideResult.status === "rejected") {
+        logBookAccessFailure("read overrides for selected book", "user_book_access", overrideResult.reason);
+        return jsonResponse({ error: "Unable to load user access information." }, 500);
+      }
+      const purchases = purchaseResult.value;
+      const overrides = overrideResult.value;
 
       return jsonResponse({
         book: { id: book.id, title: book.title, is_locked: Boolean(book.is_locked) },
