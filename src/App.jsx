@@ -22,10 +22,12 @@ import {
   Eye,
   EyeOff,
   AlertTriangle,
-  Receipt
+  Receipt,
+  Gamepad2
 } from "lucide-react";
 import { supabase, COVER_BUCKET, PDF_BUCKET } from "./lib/supabase";
 import { logAdminAction } from "./lib/adminAudit";
+import GamesPage from "./components/GamesPage";
 import {
   getAuthRole,
   isAdminUser,
@@ -705,6 +707,7 @@ function AdminApp({ session }) {
   const [logoutConfirmationOpen, setLogoutConfirmationOpen] = useState(false);
   const canManageUsers = isAdminUser(session.user);
   const canManageAdmins = isSuperAdmin(session.user);
+  const { showToast } = useToast();
 
   async function logout() {
     const { data: sessionData } = await supabase.auth.getSession();
@@ -754,6 +757,15 @@ function AdminApp({ session }) {
             active={page === "books"}
             onClick={() => {
               setPage("books");
+              setMobileOpen(false);
+            }}
+          />
+          <NavItem
+            icon={<Gamepad2 size={19} />}
+            label="Games"
+            active={page === "games"}
+            onClick={() => {
+              setPage("games");
               setMobileOpen(false);
             }}
           />
@@ -821,6 +833,7 @@ function AdminApp({ session }) {
         <div className="content">
           {page === "dashboard" && <Dashboard goBooks={() => setPage("books")} />}
           {page === "books" && <Books />}
+          {page === "games" && <GamesPage canManageGames={canManageUsers} ConfirmModal={ConfirmModal} showToast={showToast} />}
           {page === "users" && <UsersPage canManageUsers={canManageUsers} />}
           {page === "payments" && <PaymentsPage canManagePayments={canManageUsers} />}
           {page === "admins" && (canManageAdmins ? <AdminsPage /> : <AccessDeniedPage message="You do not have permission to manage administrator accounts." />)}

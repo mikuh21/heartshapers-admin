@@ -1,0 +1,15 @@
+source_path,target_storage_path,asset_type,game_id
+assets/covers/20260623-090512.jpg,games/game-bible-action/cover/20260623-090512.jpg,cover,game-bible-action
+assets/covers/20260623-090531.jpg,games/game-bible-draw/cover/20260623-090531.jpg,cover,game-bible-draw
+assets/covers/20260623-090454.jpg,games/game-bible-groups/cover/20260623-090454.jpg,cover,game-bible-groups
+assets/covers/20260623-090506.jpg,games/game-bible-proverbs/cover/20260623-090506.jpg,cover,game-bible-proverbs
+assets/covers/20260623-090526.jpg,games/game-bible-question/cover/20260623-090526.jpg,cover,game-bible-question
+assets/covers/20260623-090517.jpg,games/game-bible-talk/cover/20260623-090517.jpg,cover,game-bible-talk
+assets/covers/20260623-090500.jpg,games/game-inspirational-talk-1/cover/20260623-090500.jpg,cover,game-inspirational-talk-1
+assets/covers/20260623-090521.jpg,games/game-inspirational-talk-2/cover/20260623-090521.jpg,cover,game-inspirational-talk-2
+assets/covers/BIBLE ACTION WHITE BG.png,games/game-bible-action/background/BIBLE ACTION WHITE BG.png,background,game-bible-action
+assets/covers/BIBLE DRAW WHITE BG.png,games/game-bible-draw/background/BIBLE DRAW WHITE BG.png,background,game-bible-draw
+assets/covers/BIBLE GROUP WHITE BG.png,games/game-bible-groups/background/BIBLE GROUP WHITE BG.png,background,game-bible-groups
+assets/covers/BIBLE QUESTIONS WHITE BG.png,games/game-bible-question/background/BIBLE QUESTIONS WHITE BG.png,background,game-bible-question
+assets/covers/INSPIRATIONAL TALK WHITE BG.png,games/game-inspirational-talk-1/background/INSPIRATIONAL TALK WHITE BG.png,background,game-inspirational-talk-1
+assets/covers/INSPIRATIONAL TALK WHITE BG.png,games/game-inspirational-talk-2/background/INSPIRATIONAL TALK WHITE BG.png,background,game-inspirational-talk-2
