@@ -1,7 +1,6 @@
 /// <reference lib="deno.ns" />
 
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2.57.0";
-import { insertAdminAuditLog } from "../_shared/adminAudit.ts";
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
@@ -13,6 +12,54 @@ const corsHeaders = {
 const SUPABASE_URL = Deno.env.get("SUPABASE_URL");
 const SERVICE_ROLE_KEY = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY");
 const ANON_KEY = Deno.env.get("SUPABASE_ANON_KEY");
+
+type AdminAuditEvent = {
+  action: string;
+  actorEmail?: string | null;
+  targetType?: string | null;
+  targetId?: string | null;
+  targetName?: string | null;
+  details?: Record<string, unknown>;
+};
+
+function sanitizeAuditDetails(value: unknown): unknown {
+  if (Array.isArray(value)) return value.map(sanitizeAuditDetails);
+  if (!value || typeof value !== "object") return value;
+
+  return Object.fromEntries(Object.entries(value).map(([key, item]) => [
+    key,
+    /password|token|secret|credential|pin|api[_ -]?key/i.test(key)
+      ? "[redacted]"
+      : sanitizeAuditDetails(item)
+  ]));
+}
+
+async function insertAdminAuditLog(client: any, event: AdminAuditEvent): Promise<void> {
+  try {
+    const { error } = await client.from("admin_logs").insert({
+      action: event.action,
+      admin_email: event.actorEmail || null,
+      details: sanitizeAuditDetails({
+        ...(event.details || {}),
+        ...(event.targetType ? { target_type: event.targetType } : {}),
+        ...(event.targetId ? { target_id: event.targetId } : {}),
+        ...(event.targetName ? { target_name: event.targetName } : {})
+      })
+    });
+
+    if (error) {
+      console.error("Admin audit log write failed.", {
+        action: event.action,
+        code: error.code || "UNKNOWN"
+      });
+    }
+  } catch (error) {
+    console.error("Admin audit log write failed.", {
+      action: event.action,
+      code: error instanceof Error ? error.name : "UNKNOWN"
+    });
+  }
+}
 
 function jsonResponse(data: unknown, status = 200): Response {
   return new Response(JSON.stringify(data), {
