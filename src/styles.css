@@ -269,6 +269,9 @@ td { padding: 13px 17px; border-top: 1px solid #eef0f3; font-size: 13px; }
 .games-name-cell strong, .games-name-cell span { display: block; }
 .games-name-cell span { margin-top: 3px; color: #8a93a3; font-size: 11px; }
 .games-placements-cell { text-align: center; vertical-align: middle; }
+.games-cards-cell { text-align: center; vertical-align: middle; }
+.games-access-cell { white-space: nowrap; }
+.games-access-cell .icon-btn { margin-left: 6px; vertical-align: middle; }
 .games-table { min-width: 900px; }
 .games-table code, .games-readonly-fields code { color: #525b68; font-size: 12px; overflow-wrap: anywhere; }
 .games-actions { display: flex; justify-content: flex-start; gap: 6px; white-space: nowrap; }
@@ -279,13 +282,20 @@ td { padding: 13px 17px; border-top: 1px solid #eef0f3; font-size: 13px; }
 .games-detail-section { display: grid; gap: 12px; min-width: 0; }
 .games-detail-section h4 { margin: 0; font-size: 16px; color: #344054; }
 .games-info-form { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; }
-.games-info-form > label, .games-rule-entry > label { display: grid; gap: 6px; font-size: 12px; font-weight: 650; color: #4c5561; }
-.games-info-form input, .games-info-form textarea, .games-rule-entry textarea {
+.games-info-form > label, .games-info-form > .games-access-field, .games-rule-entry > label { display: grid; gap: 6px; font-size: 12px; font-weight: 650; color: #4c5561; }
+.games-info-form > .games-access-field { grid-column: 1 / -1; }
+.games-info-form input, .games-info-form textarea, .games-info-form select, .games-rule-entry textarea {
   width: 100%; border: 1px solid #dfe3ea; border-radius: 8px; padding: 10px 11px;
   outline: 0; background: white; color: #333; font: inherit; font-size: 13px;
 }
 .games-info-form textarea, .games-rule-entry textarea { resize: vertical; }
-.games-info-form input:focus, .games-info-form textarea:focus, .games-rule-entry textarea:focus { border-color: #89929e; }
+.games-info-form input:focus, .games-info-form textarea:focus, .games-info-form select:focus, .games-rule-entry textarea:focus { border-color: #89929e; }
+.games-info-form .switch-row input { width: 17px; height: 17px; padding: 0; }
+.games-info-form .games-access-box { width: 100%; box-sizing: border-box; align-items: center; }
+.games-info-form .games-access-description { flex: 1 1 auto; min-width: 0; }
+.games-info-form .games-access-description .muted { line-height: 1.4; }
+.games-info-form .games-access-control { flex: 0 0 78px; width: 78px; justify-content: center; flex-shrink: 0; white-space: nowrap; }
+.games-info-form .games-access-value { width: 44px; text-align: left; }
 .games-readonly-fields { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 10px; grid-column: 1 / -1; }
 .games-readonly-fields > div { display: grid; align-content: start; gap: 6px; padding: 11px; background: #fafbfc; border: 1px solid #eef0f3; border-radius: 8px; min-width: 0; }
 .games-cover-detail { display: grid; gap: 7px; grid-column: 1 / -1; }
@@ -467,6 +477,9 @@ td { padding: 13px 17px; border-top: 1px solid #eef0f3; font-size: 13px; }
   margin-top: 7px; padding: 13px; border: 1px solid #e5e8ed; border-radius: 8px;
   display: flex; align-items: center; justify-content: space-between; gap: 15px;
 }
+.modal-body .access-box > div:first-child { flex: 1 1 auto; min-width: 0; }
+.modal-body .access-box > .switch-row { flex: 0 0 76px; width: 76px; flex-shrink: 0; }
+.modal-body .access-box > .switch-row > span { width: 44px; line-height: 16px; white-space: nowrap; }
 .access-box strong, .access-box span { display: block; }
 .access-box .muted { margin-top: 3px; }
 .switch-row { display: flex; align-items: center; gap: 7px; font-size: 13px; }

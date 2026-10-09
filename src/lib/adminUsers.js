@@ -172,6 +172,7 @@ export async function getGameUserAccess(gameId) {
   return {
     game: data.game,
     users: (data.users || []).map(normalizeUser),
+    purchasedUserIds: data.purchasedUserIds || [],
     accessOverrides: data.accessOverrides || []
   };
 }
@@ -186,7 +187,9 @@ export async function updateGameUserAccess({ gameId, userId, accessStatus }) {
       code: error?.code || error?.name || data?.code || "GAME_ACCESS_UPDATE_FAILED",
       message: data?.error || error?.message || "Unknown function error"
     });
-    throw new Error("Unable to update game user access.");
+    throw new Error(data?.error === "Verified purchases cannot be changed here."
+      ? data.error
+      : "Unable to update game user access.");
   }
 
   return data?.accessStatus;

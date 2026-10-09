@@ -10,10 +10,10 @@ export async function createGame(game) {
       subtitle: game.subtitle || null,
       description: game.description || null,
       sort_order: game.sort_order,
-      is_active: false,
-      is_locked: false
+      price: Number(game.price) || 0,
+      is_locked: true
     })
-    .select("id,title,subtitle,description,cover_image_url,game_type,is_active,is_locked,sort_order,created_at,updated_at")
+    .select("id,title,subtitle,description,cover_image_url,game_type,is_locked,price,sort_order,created_at,updated_at")
     .single();
 
   if (error?.code === "23505") {
@@ -34,7 +34,7 @@ export async function listGamesWithCounts() {
   ] = await Promise.all([
     supabase
       .from("games")
-      .select("id,title,subtitle,description,cover_image_url,game_type,is_active,is_locked,sort_order,created_at,updated_at")
+      .select("id,title,subtitle,description,cover_image_url,game_type,is_locked,price,sort_order,created_at,updated_at")
       .order("sort_order", { ascending: true }),
     supabase.from("pillars").select("id,name").order("name", { ascending: true }),
     supabase.from("game_placements").select("game_id,pillar_id")
@@ -141,31 +141,37 @@ export async function updateGameInformation(gameId, changes) {
       sort_order: changes.sort_order
     })
     .eq("id", gameId)
-    .select("id,title,subtitle,description,cover_image_url,game_type,is_active,is_locked,sort_order,created_at,updated_at")
+    .select("id,title,subtitle,description,cover_image_url,game_type,is_locked,price,sort_order,created_at,updated_at")
     .single();
 
   if (error) throw error;
   return data;
 }
 
-export async function updateGameStatus(gameId, isActive) {
+export async function loadGameAccess(gameId) {
   const { data, error } = await supabase
     .from("games")
-    .update({ is_active: isActive })
+    .select("id,is_locked,price")
     .eq("id", gameId)
-    .select("id,title,subtitle,description,cover_image_url,game_type,is_active,is_locked,sort_order,created_at,updated_at")
     .single();
 
   if (error) throw error;
   return data;
 }
 
-export async function updateGameAccess(gameId, isLocked) {
+export async function updateGameAccess(gameId, isLocked, changes = {}) {
   const { data, error } = await supabase
     .from("games")
-    .update({ is_locked: isLocked })
+    .update({
+      ...(changes.title !== undefined ? { title: changes.title } : {}),
+      ...(changes.subtitle !== undefined ? { subtitle: changes.subtitle || null } : {}),
+      ...(changes.description !== undefined ? { description: changes.description || null } : {}),
+      ...(changes.sort_order !== undefined ? { sort_order: changes.sort_order } : {}),
+      ...(changes.price !== undefined ? { price: Number(changes.price) || 0 } : {}),
+      is_locked: isLocked
+    })
     .eq("id", gameId)
-    .select("id,title,is_active,is_locked")
+    .select("id,title,subtitle,description,game_type,is_locked,price,sort_order,created_at,updated_at")
     .single();
 
   if (error) throw error;

@@ -153,13 +153,21 @@ async function listAllRowsForBook(adminClient: any, table: string, columns: stri
 }
 
 async function listAllRowsForGame(adminClient: any, columns: string, gameId: string) {
+  return listAllGameRows(adminClient, "user_game_access", columns, gameId);
+}
+
+async function listAllGamePurchases(adminClient: any, gameId: string) {
+  return listAllGameRows(adminClient, "game_purchases", "user_id", gameId);
+}
+
+async function listAllGameRows(adminClient: any, table: string, columns: string, gameId: string) {
   const rows: any[] = [];
   const perPage = 1000;
   let from = 0;
 
   while (true) {
     const { data, error } = await adminClient
-      .from("user_game_access")
+      .from(table)
       .select(columns)
       .eq("game_id", gameId)
       .order("user_id", { ascending: true })
@@ -468,10 +476,18 @@ Deno.serve(async (req: Request): Promise<Response> => {
         logGameAccessFailure("read overrides for selected game", "user_game_access", error);
         return jsonResponse({ error: "Unable to load game user access information." }, 500);
       }
+      let purchases;
+      try {
+        purchases = await listAllGamePurchases(adminClient, gameId);
+      } catch (error) {
+        logGameAccessFailure("read purchases for selected game", "game_purchases", error);
+        return jsonResponse({ error: "Unable to load game user access information." }, 500);
+      }
 
       return jsonResponse({
         game: { id: game.id, title: game.title, is_locked: Boolean(game.is_locked) },
         users: normalUsers.map(normalizeUser),
+        purchasedUserIds: (purchases || []).map((purchase: any) => purchase.user_id),
         accessOverrides: (overrides || []).map((override: any) => ({
           user_id: override.user_id,
           access_status: override.access_status
@@ -499,6 +515,19 @@ Deno.serve(async (req: Request): Promise<Response> => {
       }
       if (gameError || !game) {
         return jsonResponse({ error: "Unable to update game user access." }, 404);
+      }
+
+      const { data: purchase, error: purchaseError } = await adminClient
+        .from("game_purchases")
+        .select("id")
+        .eq("user_id", userId)
+        .eq("game_id", gameId)
+        .maybeSingle();
+      if (purchaseError) {
+        return jsonResponse({ error: "Unable to update game user access." }, 500);
+      }
+      if (purchase) {
+        return jsonResponse({ error: "Verified purchases cannot be changed here." }, 409);
       }
 
       const { error: updateError } = await adminClient

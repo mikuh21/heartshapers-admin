@@ -2501,27 +2501,39 @@ function PaymentsPage({ canManagePayments }) {
   const [users, setUsers] = useState([]);
   const [search, setSearch] = useState("");
   const [status, setStatus] = useState("all");
+  const [paymentCategory, setPaymentCategory] = useState("books");
   const [selected, setSelected] = useState(null);
   const [proofUrl, setProofUrl] = useState("");
   const [note, setNote] = useState("");
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
+  const loadSequence = useRef(0);
 
-  async function loadPayments() {
+  async function loadPayments(category = paymentCategory) {
+    const requestSequence = ++loadSequence.current;
     setLoading(true);
     setError("");
+    const paymentQuery = category === "games"
+      ? supabase.from("game_payment_submissions").select("*, games(title, price)").order("created_at", { ascending: false })
+      : supabase.from("payment_submissions").select("*, books(title, price)").order("created_at", { ascending: false });
     const [{ data, error: paymentError }, userRows] = await Promise.all([
-      supabase.from("payment_submissions").select("*, books(title, price)").order("created_at", { ascending: false }),
+      paymentQuery,
       listUsers().catch(() => [])
     ]);
+    if (requestSequence !== loadSequence.current) return;
     if (paymentError) setError(paymentError.message);
     setPayments(data || []);
     setUsers(userRows);
+    setSelected(null);
     setLoading(false);
   }
 
-  useEffect(() => { if (canManagePayments) loadPayments(); }, [canManagePayments]);
+  useEffect(() => { if (canManagePayments) loadPayments(paymentCategory); }, [canManagePayments, paymentCategory]);
+
+  function getPaymentProduct(payment) {
+    return paymentCategory === "games" ? payment.games : payment.books;
+  }
 
   async function openPayment(payment) {
     setSelected(payment);
@@ -2529,9 +2541,9 @@ function PaymentsPage({ canManagePayments }) {
     setProofUrl("");
     await logAdminAction({
       action: "payment_submission_viewed",
-      targetType: "payment_submission",
+      targetType: paymentCategory === "games" ? "game_payment_submission" : "payment_submission",
       targetId: payment.id,
-      targetName: payment.books?.title || null,
+      targetName: getPaymentProduct(payment)?.title || null,
       details: { customer_id: payment.user_id, amount: payment.amount }
     });
     const { data, error: signedUrlError } = await supabase.storage
@@ -2543,7 +2555,7 @@ function PaymentsPage({ canManagePayments }) {
   const userById = new Map(users.map((user) => [user.id, user]));
   const filtered = payments.filter((payment) => {
     const user = userById.get(payment.user_id);
-    const haystack = `${user?.full_name || ""} ${user?.email || ""} ${payment.books?.title || ""} ${payment.reference_number}`.toLowerCase();
+    const haystack = `${user?.full_name || ""} ${user?.email || ""} ${getPaymentProduct(payment)?.title || ""} ${payment.reference_number}`.toLowerCase();
     return (status === "all" || payment.status === status) && haystack.includes(search.toLowerCase());
   });
 
@@ -2552,7 +2564,9 @@ function PaymentsPage({ canManagePayments }) {
     setBusy(true);
     try {
       const { data, error: reviewError } = await supabase.rpc(
-        action === "verify" ? "verify_payment_submission" : "reject_payment_submission",
+        paymentCategory === "games"
+          ? action === "verify" ? "verify_game_payment_submission" : "reject_game_payment_submission"
+          : action === "verify" ? "verify_payment_submission" : "reject_payment_submission",
         { payment_id: selected.id, note: note.trim() || null }
       );
       if (reviewError) throw reviewError;
@@ -2562,9 +2576,9 @@ function PaymentsPage({ canManagePayments }) {
     } catch (reviewError) {
       await logAdminAction({
         action: action === "verify" ? "payment_verification_failed" : "payment_rejection_failed",
-        targetType: "payment_submission",
+        targetType: paymentCategory === "games" ? "game_payment_submission" : "payment_submission",
         targetId: selected.id,
-        targetName: selected.books?.title || null,
+        targetName: getPaymentProduct(selected)?.title || null,
         details: { failure_code: reviewError.code || "PAYMENT_REVIEW_FAILED" }
       });
       showToast(reviewError.message || "Unable to review this payment.", "error");
@@ -2582,18 +2596,19 @@ function PaymentsPage({ canManagePayments }) {
       </div>
       <div className="toolbar">
         <div className="search-box"><Search size={18} /><input value={search} onChange={(event) => setSearch(event.target.value)} placeholder="Search payments..." /></div>
+        <div className="select-box"><select value={paymentCategory} onChange={(event) => { setSelected(null); setPaymentCategory(event.target.value); }} aria-label="Filter payments by category"><option value="books">Books</option><option value="games">Games</option></select><ChevronDown size={16} /></div>
         <div className="select-box"><select value={status} onChange={(event) => setStatus(event.target.value)}><option value="all">All statuses</option><option value="pending">Pending</option><option value="verified">Verified</option><option value="rejected">Rejected</option></select><ChevronDown size={16} /></div>
       </div>
       {error && <div className="error-box page-error">{error}</div>}
       <div className="table-card">
-        {loading ? <div className="empty-state"><Loader2 className="spin" /> Loading payments...</div> : filtered.length === 0 ? <div className="empty-state"><Receipt size={34} /><strong>No payments found</strong><span>Pending submissions will appear here.</span></div> : (
-          <div className="table-wrap"><table><thead><tr><th>Customer</th><th>Book</th><th>Amount</th><th>Reference</th><th>Status</th><th>Submitted</th></tr></thead><tbody>
-            {filtered.map((payment) => { const user = userById.get(payment.user_id); return <tr key={payment.id} onClick={() => openPayment(payment)} className="clickable-row"><td><strong>{user?.full_name || "Unknown customer"}</strong><div className="muted">{user?.email || payment.user_id}</div></td><td>{payment.books?.title || "Unknown book"}</td><td>{formatCurrency(payment.amount)}</td><td>{payment.reference_number}</td><td><span className={`status ${payment.status}`}>{payment.status}</span></td><td>{formatDate(payment.created_at)}</td></tr>; })}
+        {loading ? <div className="empty-state"><Loader2 className="spin" /> Loading payments...</div> : filtered.length === 0 ? <div className="empty-state"><Receipt size={34} /><strong>No {paymentCategory} payments found</strong><span>{status === "pending" ? "Pending submissions will appear here." : `No ${paymentCategory} submissions match the selected filters.`}</span></div> : (
+          <div className="table-wrap"><table><thead><tr><th>Customer</th><th>{paymentCategory === "games" ? "Game" : "Book"}</th><th>Amount</th><th>Reference</th><th>Status</th><th>Submitted</th></tr></thead><tbody>
+            {filtered.map((payment) => { const user = userById.get(payment.user_id); return <tr key={payment.id} onClick={() => openPayment(payment)} className="clickable-row"><td><strong>{user?.full_name || "Unknown customer"}</strong><div className="muted">{user?.email || payment.user_id}</div></td><td>{getPaymentProduct(payment)?.title || `Unknown ${paymentCategory.slice(0, -1)}`}</td><td>{formatCurrency(payment.amount)}</td><td>{payment.reference_number}</td><td><span className={`status ${payment.status}`}>{payment.status}</span></td><td>{formatDate(payment.created_at)}</td></tr>; })}
           </tbody></table></div>
         )}
       </div>
       {selected && <div className="modal-backdrop"><div className="modal payment-modal"><div className="modal-header"><div><h3>Payment Review</h3><p className="muted">{selected.status} submission</p></div><button className="icon-btn" onClick={() => setSelected(null)}><X size={20} /></button></div><div className="modal-body">
-        {(() => { const user = userById.get(selected.user_id); return <><div className="detail-grid"><div><span className="muted">Customer</span><strong>{user?.full_name || "Unknown customer"}</strong><span>{user?.email || "—"}</span></div><div><span className="muted">Book</span><strong>{selected.books?.title || "Unknown book"}</strong><span>{formatCurrency(selected.books?.price)}</span></div><div><span className="muted">Amount paid</span><strong>{formatCurrency(selected.amount)}</strong><span>Ref: {selected.reference_number}</span></div><div><span className="muted">Submitted</span><strong>{formatDate(selected.created_at)}</strong><span className={`status ${selected.status}`}>{selected.status}</span></div></div><label>Payment proof</label>{proofUrl ? <img className="payment-proof" src={proofUrl} alt="Payment proof" /> : <div className="empty-state small-empty">Unable to load payment proof.</div>}{selected.status === "pending" && <><label>Admin note / rejection reason</label><textarea value={note} onChange={(event) => setNote(event.target.value)} rows={3} placeholder="Optional note for verification, required for rejection" /></>}{selected.admin_notes && selected.status !== "pending" && <p className="field-hint">Admin note: {selected.admin_notes}</p>}</>; })()}
+        {(() => { const user = userById.get(selected.user_id); const product = getPaymentProduct(selected); return <><div className="detail-grid"><div><span className="muted">Customer</span><strong>{user?.full_name || "Unknown customer"}</strong><span>{user?.email || "—"}</span></div><div><span className="muted">{paymentCategory === "games" ? "Game" : "Book"}</span><strong>{product?.title || `Unknown ${paymentCategory.slice(0, -1)}`}</strong><span>{formatCurrency(product?.price)}</span></div><div><span className="muted">Amount paid</span><strong>{formatCurrency(selected.amount)}</strong><span>Ref: {selected.reference_number}</span></div><div><span className="muted">Submitted</span><strong>{formatDate(selected.created_at)}</strong><span className={`status ${selected.status}`}>{selected.status}</span></div></div><label>Payment proof</label>{proofUrl ? <img className="payment-proof" src={proofUrl} alt="Payment proof" /> : <div className="empty-state small-empty">Unable to load payment proof.</div>}{selected.status === "pending" && <><label>Admin note / rejection reason</label><textarea value={note} onChange={(event) => setNote(event.target.value)} rows={3} placeholder="Optional note for verification, required for rejection" /></>}{selected.admin_notes && selected.status !== "pending" && <p className="field-hint">Admin note: {selected.admin_notes}</p>}</>; })()}
       </div>{selected.status === "pending" && <div className="modal-footer"><button className="secondary-btn danger" onClick={() => { if (!note.trim()) { showToast("Add a rejection reason first.", "error"); return; } review("reject"); }} disabled={busy}>Reject Payment</button><button className="primary-btn" onClick={() => review("verify")} disabled={busy}>{busy ? "Saving..." : "Verify Payment"}</button></div>}</div></div>}
     </>
   );

@@ -19,10 +19,10 @@ import {
   createGameCard,
   createGameRule,
   deleteGame,
+  loadGameAccess,
   listGamesWithCounts,
   loadGameDetails,
   loadPlacementNames,
-  updateGameInformation,
   updateGameAccess,
   updateGameCard,
   updateGameRule
@@ -39,10 +39,6 @@ const GAME_TYPES = [
   { label: "Inspirational Talk 1", value: "inspirational_talk_1" },
   { label: "Inspirational Talk 2", value: "inspirational_talk_2" }
 ];
-
-function StatusBadge({ active }) {
-  return <span className={`status ${active ? "active" : "disabled"}`}>{active ? "Active" : "Inactive"}</span>;
-}
 
 function formatMetadata(metadata) {
   return JSON.stringify(metadata ?? {}, null, 2);
@@ -321,7 +317,7 @@ export default function GamesPage({ canManageGames, ConfirmModal, showToast }) {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
   const [search, setSearch] = useState("");
-  const [statusFilter, setStatusFilter] = useState("all");
+  const [accessFilter, setAccessFilter] = useState("all");
   const [pillarFilter, setPillarFilter] = useState("all");
   const [selectedGame, setSelectedGame] = useState(null);
   const [addGameOpen, setAddGameOpen] = useState(false);
@@ -356,35 +352,13 @@ export default function GamesPage({ canManageGames, ConfirmModal, showToast }) {
     return games.filter((game) => {
       const matchesSearch = !query ||
         `${game.title || ""} ${game.game_type || ""}`.toLowerCase().includes(query);
-      const matchesStatus = statusFilter === "all" ||
-        game.is_active === (statusFilter === "active");
+      const matchesAccess = accessFilter === "all" ||
+        game.is_locked === (accessFilter === "locked");
       const matchesPillar = pillarFilter === "all" ||
         game.pillarIds.includes(pillarFilter);
-      return matchesSearch && matchesStatus && matchesPillar;
+      return matchesSearch && matchesAccess && matchesPillar;
     });
-  }, [games, search, statusFilter, pillarFilter]);
-
-  async function changeGlobalGameAccess(game, isLocked) {
-    try {
-      const updatedGame = await updateGameAccess(game.id, isLocked);
-      setGames((current) => current.map((item) => item.id === updatedGame.id
-        ? { ...item, ...updatedGame }
-        : item));
-      setSelectedGame((current) => current?.id === updatedGame.id
-        ? { ...current, ...updatedGame }
-        : current);
-      await logAdminAction({
-        action: "game_access_changed",
-        targetType: "game",
-        targetId: updatedGame.id,
-        targetName: updatedGame.title,
-        details: { access: isLocked ? "Locked" : "Free" }
-      });
-      showToast(`${updatedGame.title} is now ${isLocked ? "locked" : "free"}.`, "success");
-    } catch (accessError) {
-      showToast(accessError.message || "Unable to update game access.", "error");
-    }
-  }
+  }, [games, search, accessFilter, pillarFilter]);
 
   async function confirmGameDeletion() {
     if (!deleteTarget) return false;
@@ -431,10 +405,10 @@ export default function GamesPage({ canManageGames, ConfirmModal, showToast }) {
           <input value={search} onChange={(event) => setSearch(event.target.value)} placeholder="Search games..." />
         </div>
         <div className="select-box">
-          <select value={statusFilter} onChange={(event) => setStatusFilter(event.target.value)} aria-label="Filter games by status">
-            <option value="all">All statuses</option>
-            <option value="active">Active</option>
-            <option value="inactive">Inactive</option>
+          <select value={accessFilter} onChange={(event) => setAccessFilter(event.target.value)} aria-label="Filter games by access">
+            <option value="all">All access</option>
+            <option value="free">Free</option>
+            <option value="locked">Locked</option>
           </select>
           <ChevronDown size={16} />
         </div>
@@ -460,33 +434,23 @@ export default function GamesPage({ canManageGames, ConfirmModal, showToast }) {
         ) : (
           <div className="table-wrap">
             <table>
-              <thead><tr><th>Game</th><th>Game Type</th><th>Cards</th><th>Status</th><th>Access</th><th className="games-placements-cell">Placements</th><th></th></tr></thead>
+              <thead><tr><th>Game</th><th>Game Type</th><th className="games-cards-cell">Cards</th><th>Access</th><th className="games-placements-cell">Placements</th><th></th></tr></thead>
               <tbody>
                 {filteredGames.map((game) => (
                   <tr key={game.id}>
                     <td><div className="games-name-cell">{game.cover_image_url ? <img src={game.cover_image_url} alt="" /> : <div className="cover-placeholder"><Gamepad2 size={20} /></div>}<div><strong>{game.title}</strong><span>{game.subtitle || game.id}</span></div></div></td>
                     <td><code>{game.game_type}</code></td>
-                    <td>{game.cardCount}</td>
-                    <td><StatusBadge active={game.is_active} /></td>
-                    <td>
-                      <select
-                        className={`user-access-status-select status ${game.is_locked ? "locked" : "free"}`}
-                        value={game.is_locked ? "locked" : "free"}
-                        onChange={(event) => changeGlobalGameAccess(game, event.target.value === "locked")}
-                        aria-label={`Default access for ${game.title}`}
-                      >
-                        <option value="free">Free</option>
-                        <option value="locked">Locked</option>
-                      </select>
+                    <td className="games-cards-cell">{game.cardCount}</td>
+                    <td className="games-access-cell">
+                      <button type="button" className="icon-btn" title="User Access" aria-label={`Manage user access for ${game.title}`} onClick={() => setAccessGame(game)}>
+                        <Users size={17} />
+                      </button>
                     </td>
                     <td className="games-placements-cell">{game.placementCount}</td>
                     <td>
                       <div className="actions">
                         <button type="button" className="icon-btn" title="View / Edit" aria-label={`View or edit ${game.title}`} onClick={() => setSelectedGame(game)}>
                           <Pencil size={17} />
-                        </button>
-                        <button type="button" className="icon-btn" title="User Access" aria-label={`Manage user access for ${game.title}`} onClick={() => setAccessGame(game)}>
-                          <Users size={17} />
                         </button>
                         <button type="button" className="icon-btn danger" title="Delete" aria-label={`Delete ${game.title}`} onClick={() => setDeleteTarget(game)}>
                           <Trash2 size={17} />
@@ -533,7 +497,7 @@ export default function GamesPage({ canManageGames, ConfirmModal, showToast }) {
                 ...(game.subtitle ? { Subtitle: game.subtitle } : {}),
                 ...(game.description ? { Description: game.description } : {}),
                 "Sort Order": game.sort_order,
-                "Initial Status": "Inactive"
+                "Initial Access": "Locked"
               }
             }).catch((auditError) => {
               console.error("Game creation audit logging failed.", {
@@ -545,8 +509,8 @@ export default function GamesPage({ canManageGames, ConfirmModal, showToast }) {
             setRefreshKey((current) => current + 1);
             showToast(
               auditSucceeded
-                ? `${game.title} created as inactive.`
-                : "Game created as inactive, but its audit log could not be saved.",
+                ? `${game.title} created as locked.`
+                : "Game created as locked, but its audit log could not be saved.",
               auditSucceeded ? "success" : "error"
             );
           }}
@@ -582,6 +546,7 @@ function GameUserAccessModal({ game, onClose, showToast }) {
   const showToastRef = useRef(showToast);
   showToastRef.current = showToast;
   const [users, setUsers] = useState([]);
+  const [purchasedUserIds, setPurchasedUserIds] = useState(() => new Set());
   const [accessOverrides, setAccessOverrides] = useState(() => new Map());
   const [loading, setLoading] = useState(true);
   const [loadError, setLoadError] = useState(false);
@@ -595,6 +560,7 @@ function GameUserAccessModal({ game, onClose, showToast }) {
       .then((access) => {
         if (!active) return;
         setUsers(access.users);
+        setPurchasedUserIds(new Set(access.purchasedUserIds));
         setAccessOverrides(new Map(access.accessOverrides.map((entry) => [
           entry.user_id,
           entry.access_status
@@ -644,6 +610,9 @@ function GameUserAccessModal({ game, onClose, showToast }) {
   const visibleUsers = users.filter((user) =>
     !query || `${user.full_name || ""} ${user.email || ""}`.toLowerCase().includes(query)
   );
+  const statusForUser = (userId) => purchasedUserIds.has(userId)
+    ? "Paid"
+    : accessOverrides.get(userId) || (game.is_locked ? "locked" : "free");
 
   return (
     <div className="modal-backdrop">
@@ -688,20 +657,23 @@ function GameUserAccessModal({ game, onClose, showToast }) {
                     <span>Access</span>
                   </div>
                   {visibleUsers.map((user) => {
-                    const status = accessOverrides.get(user.id) || (game.is_locked ? "locked" : "free");
+                    const isPaid = purchasedUserIds.has(user.id);
+                    const status = statusForUser(user.id);
+                    const displayStatus = status === "Paid" ? "Paid" : status === "free" ? "Free" : "Locked";
                     return (
                       <div className="user-access-row" role="listitem" key={user.id}>
                         <strong>{user.full_name || "Unnamed user"}</strong>
                         <span className="user-access-email">{user.email || "—"}</span>
                         <select
-                          className={`user-access-status-select status ${status}`}
-                          value={status}
-                          disabled={updatingUserIds.has(user.id)}
+                          className={`user-access-status-select status ${displayStatus.toLowerCase()}`}
+                          value={isPaid ? "paid" : status}
+                          disabled={isPaid || updatingUserIds.has(user.id)}
                           onChange={(event) => changeUserAccess(user, event.target.value)}
                           aria-label={`Access status for ${user.full_name || user.email} for ${game.title}`}
                         >
                           <option value="locked">Locked</option>
                           <option value="free">Free</option>
+                          <option value="paid" disabled={!isPaid}>Paid</option>
                         </select>
                       </div>
                     );
@@ -723,6 +695,7 @@ function AddGameModal({ existingGames, nextSortOrder, onClose, onCreated, showTo
     game_type: "",
     subtitle: "",
     description: "",
+    price: "0",
     sort_order: String(nextSortOrder)
   });
   const [errors, setErrors] = useState({});
@@ -745,6 +718,8 @@ function AddGameModal({ existingGames, nextSortOrder, onClose, onCreated, showTo
     const title = form.title.trim();
     const sortOrderText = form.sort_order.trim();
     const sortOrder = sortOrderText === "" ? nextSortOrder : Number(sortOrderText);
+    const priceText = form.price.trim();
+    const price = priceText === "" ? 0 : Number(priceText);
 
     if (!id) nextErrors.id = "Game ID is required.";
     else if (!/^[a-z0-9_-]+$/.test(id)) {
@@ -759,6 +734,9 @@ function AddGameModal({ existingGames, nextSortOrder, onClose, onCreated, showTo
     if (sortOrderText !== "" && (!Number.isFinite(sortOrder) || !Number.isInteger(sortOrder))) {
       nextErrors.sort_order = "Sort order must be a whole number.";
     }
+    if (!Number.isFinite(price) || price < 0) {
+      nextErrors.price = "Price must be zero or greater.";
+    }
 
     setErrors(nextErrors);
     if (Object.keys(nextErrors).length > 0) return;
@@ -771,6 +749,7 @@ function AddGameModal({ existingGames, nextSortOrder, onClose, onCreated, showTo
         game_type: form.game_type,
         subtitle: form.subtitle.trim(),
         description: form.description.trim(),
+        price,
         sort_order: sortOrder
       });
       await onCreated(game);
@@ -816,6 +795,10 @@ function AddGameModal({ existingGames, nextSortOrder, onClose, onCreated, showTo
             <label htmlFor="new-game-description">Description <span className="muted">(optional)</span></label>
             <textarea id="new-game-description" rows={3} value={form.description} onChange={(event) => update("description", event.target.value)} />
 
+            <label htmlFor="new-game-price">Price (₱)</label>
+            <input id="new-game-price" type="number" min="0" step="0.01" value={form.price} onChange={(event) => update("price", event.target.value)} aria-invalid={Boolean(errors.price)} />
+            {errors.price && <span className="field-error">{errors.price}</span>}
+
             <label htmlFor="new-game-sort-order">Sort Order <span className="muted">(optional)</span></label>
             <input id="new-game-sort-order" type="number" step="1" value={form.sort_order} onChange={(event) => update("sort_order", event.target.value)} aria-invalid={Boolean(errors.sort_order)} aria-describedby={errors.sort_order ? "new-game-sort-order-error" : undefined} />
             {errors.sort_order && <span className="field-error" id="new-game-sort-order-error">{errors.sort_order}</span>}
@@ -836,11 +819,14 @@ function GameDetailsModal({ game, onClose, onSaved, showToast }) {
   const [details, setDetails] = useState({ rules: [], cards: [], placements: [] });
   const [loadErrors, setLoadErrors] = useState({});
   const [loading, setLoading] = useState(true);
+  const [accessLoaded, setAccessLoaded] = useState(false);
   const [form, setForm] = useState({
     title: game.title || "",
     subtitle: game.subtitle || "",
     description: game.description || "",
-    sort_order: String(game.sort_order ?? 0)
+    price: String(game.price ?? 0),
+    sort_order: String(game.sort_order ?? 0),
+    is_locked: Boolean(game.is_locked)
   });
   const [ruleDrafts, setRuleDrafts] = useState({});
   const [savingInfo, setSavingInfo] = useState(false);
@@ -852,32 +838,59 @@ function GameDetailsModal({ game, onClose, onSaved, showToast }) {
   useEffect(() => {
     let active = true;
     setLoading(true);
-    loadGameDetails(game.id).then(async (result) => {
+    setAccessLoaded(false);
+    setLoadErrors({});
+    Promise.allSettled([
+      loadGameDetails(game.id),
+      loadGameAccess(game.id)
+    ]).then(async ([detailsResult, accessResult]) => {
       const errors = {};
-      if (result.rules.error) errors.rules = result.rules.error.message;
-      if (result.cards.error) errors.cards = result.cards.error.message;
-      let placements = result.placements.data;
-      if (result.placements.error) {
-        errors.placements = result.placements.error.message;
-        placements = [];
+      let nextDetails = { rules: [], cards: [], placements: [] };
+
+      if (detailsResult.status === "rejected") {
+        errors.details = detailsResult.reason?.message || "Unable to load game details.";
       } else {
-        try {
-          placements = await loadPlacementNames(placements);
-        } catch (placementError) {
-          errors.placements = placementError.message || "Unable to load placements.";
+        const result = detailsResult.value;
+        if (result.rules.error) errors.rules = result.rules.error.message;
+        if (result.cards.error) errors.cards = result.cards.error.message;
+        let placements = result.placements.data;
+        if (result.placements.error) {
+          errors.placements = result.placements.error.message;
           placements = [];
+        } else {
+          try {
+            placements = await loadPlacementNames(placements);
+          } catch (placementError) {
+            errors.placements = placementError.message || "Unable to load placements.";
+            placements = [];
+          }
         }
+        nextDetails = {
+          rules: result.rules.data,
+          cards: result.cards.data,
+          placements
+        };
       }
+
       if (!active) return;
+
+      if (accessResult.status === "fulfilled" &&
+          typeof accessResult.value?.is_locked === "boolean") {
+        setForm((current) => ({
+          ...current,
+          is_locked: accessResult.value.is_locked
+        }));
+        setAccessLoaded(true);
+      } else {
+        const message = accessResult.status === "rejected"
+          ? accessResult.reason?.message
+          : "The game access setting was not returned.";
+        errors.access = `Unable to load this game's access setting${message ? `: ${message}` : "."}`;
+      }
+
       setLoadErrors(errors);
-      setDetails({
-        rules: result.rules.data,
-        cards: result.cards.data,
-        placements
-      });
-      setRuleDrafts(Object.fromEntries(result.rules.data.map((rule) => [rule.id, rule.rule_text || ""])));
-    }).catch((loadError) => {
-      if (active) setLoadErrors({ details: loadError.message || "Unable to load game details." });
+      setDetails(nextDetails);
+      setRuleDrafts(Object.fromEntries(nextDetails.rules.map((rule) => [rule.id, rule.rule_text || ""])));
     }).finally(() => {
       if (active) setLoading(false);
     });
@@ -894,33 +907,57 @@ function GameDetailsModal({ game, onClose, onSaved, showToast }) {
     event.preventDefault();
     const title = form.title.trim();
     const sortOrder = Number(form.sort_order);
-    if (!title || !Number.isInteger(sortOrder)) {
-      showToast("Enter a title and a whole-number sort order.", "error");
+    const price = Number(form.price);
+    if (!title || !Number.isInteger(sortOrder) || !Number.isFinite(price) || price < 0) {
+      showToast("Enter a title, a nonnegative price, and a whole-number sort order.", "error");
       return;
     }
 
     setSavingInfo(true);
     try {
-      const updatedGame = await updateGameInformation(game.id, {
-        ...form,
+      const updatedGame = await updateGameAccess(game.id, Boolean(form.is_locked), {
         title,
-        sort_order: sortOrder
+        subtitle: form.subtitle,
+        description: form.description,
+        sort_order: sortOrder,
+        price
       });
+      const accessChanged = Boolean(game.is_locked) !== Boolean(updatedGame.is_locked);
       await logAdminAction({
-        action: "game_information_updated",
+        action: accessChanged && title === game.title &&
+          form.subtitle === (game.subtitle || "") &&
+          form.description === (game.description || "") &&
+          sortOrder === Number(game.sort_order) &&
+          price === Number(game.price || 0)
+          ? "game_access_changed"
+          : "game_information_updated",
         targetType: "game",
         targetId: updatedGame.id,
         targetName: updatedGame.title,
-        details: { changed_fields: ["title", "subtitle", "description", "sort order"] }
+        details: {
+          changed_fields: [
+            ...(title !== game.title ? ["title"] : []),
+            ...(form.subtitle !== (game.subtitle || "") ? ["subtitle"] : []),
+            ...(form.description !== (game.description || "") ? ["description"] : []),
+            ...(sortOrder !== Number(game.sort_order) ? ["sort order"] : []),
+            ...(price !== Number(game.price || 0) ? ["price"] : []),
+            ...(accessChanged ? ["access"] : [])
+          ],
+          ...(accessChanged ? { access: updatedGame.is_locked ? "Locked" : "Free" } : {})
+        }
       });
       onSaved(updatedGame);
       setForm({
         title: updatedGame.title || "",
         subtitle: updatedGame.subtitle || "",
         description: updatedGame.description || "",
-        sort_order: String(updatedGame.sort_order ?? 0)
+        price: String(updatedGame.price ?? 0),
+        sort_order: String(updatedGame.sort_order ?? 0),
+        is_locked: Boolean(updatedGame.is_locked)
       });
-      showToast("Game information saved successfully.", "success");
+      showToast(accessChanged
+        ? `Game information and ${updatedGame.is_locked ? "locked" : "free"} access saved successfully.`
+        : "Game information saved successfully.", "success");
     } catch (saveError) {
       showToast(saveError.message || "Unable to save game information.", "error");
     } finally {
@@ -1146,6 +1183,7 @@ function GameDetailsModal({ game, onClose, onSaved, showToast }) {
         </div>
         <div className="games-detail-body">
           {loadErrors.details && <div className="error-box">{loadErrors.details}</div>}
+          {loadErrors.access && <div className="error-box">{loadErrors.access}</div>}
 
           <section className="games-detail-section">
             <h4>Game Information</h4>
@@ -1153,18 +1191,40 @@ function GameDetailsModal({ game, onClose, onSaved, showToast }) {
               <label>Title<input value={form.title} onChange={(event) => setForm((current) => ({ ...current, title: event.target.value }))} required /></label>
               <label>Subtitle<input value={form.subtitle} onChange={(event) => setForm((current) => ({ ...current, subtitle: event.target.value }))} /></label>
               <label>Description<textarea rows={3} value={form.description} onChange={(event) => setForm((current) => ({ ...current, description: event.target.value }))} /></label>
+              <label>Price (₱)<input type="number" min="0" step="0.01" value={form.price} onChange={(event) => setForm((current) => ({ ...current, price: event.target.value }))} required /></label>
               <label>Sort Order<input type="number" step="1" value={form.sort_order} onChange={(event) => setForm((current) => ({ ...current, sort_order: event.target.value }))} required /></label>
+              <div className="games-access-field">
+                <span>Access</span>
+                <div className="access-box games-access-box">
+                  <div className="games-access-description">
+                    <strong>Game access</strong>
+                    <span className="muted">Locked games can be treated as restricted by your app.</span>
+                  </div>
+                  <label className="switch-row games-access-control">
+                    <input
+                      type="checkbox"
+                      checked={Boolean(form.is_locked)}
+                      onChange={(event) => setForm((current) => ({
+                        ...current,
+                        is_locked: event.target.checked
+                      }))}
+                      disabled={savingInfo || loading || !accessLoaded}
+                    />
+                    <span className="games-access-value">{form.is_locked ? "Locked" : "Free"}</span>
+                  </label>
+                </div>
+              </div>
               <div className="games-readonly-fields">
                 <div><span className="muted">Stable ID</span><code>{game.id}</code></div>
                 <div><span className="muted">Game Type</span><code>{game.game_type}</code></div>
-                <div><span className="muted">Status</span><StatusBadge active={game.is_active} /></div>
+                <div><span className="muted">Access</span><span className={`status ${game.is_locked ? "locked" : "free"}`}>{game.is_locked ? "Locked" : "Free"}</span></div>
               </div>
               <div className="games-cover-detail">
                 <span className="muted">Cover Image</span>
                 {game.cover_image_url ? <img src={game.cover_image_url} alt={`${game.title} cover`} /> : <div className="cover-placeholder"><Gamepad2 size={22} /></div>}
                 <span className="field-hint">{game.cover_image_url || "No cover image is configured."}</span>
               </div>
-              <div className="games-section-actions"><button type="submit" className="primary-btn" disabled={savingInfo}>{savingInfo ? "Saving..." : "Save Information"}</button></div>
+              <div className="games-section-actions"><button type="submit" className="primary-btn" disabled={savingInfo || loading || !accessLoaded}>{savingInfo ? "Saving..." : "Save Information"}</button></div>
             </form>
           </section>
 
