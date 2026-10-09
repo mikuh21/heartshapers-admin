@@ -1,28 +1,31 @@
-import React, { useEffect, useMemo, useState } from "react";
+import React, { useEffect, useMemo, useRef, useState } from "react";
 import {
   ChevronDown,
   ChevronLeft,
   ChevronRight,
-  Eye,
   Gamepad2,
   Loader2,
   Pencil,
   Plus,
   Search,
+  Trash2,
+  Users,
   X
 } from "lucide-react";
 import { logAdminAction } from "../lib/adminAudit";
+import { getGameUserAccess, updateGameUserAccess } from "../lib/adminUsers";
 import {
   createGame,
   createGameCard,
   createGameRule,
+  deleteGame,
   listGamesWithCounts,
   loadGameDetails,
   loadPlacementNames,
   updateGameInformation,
+  updateGameAccess,
   updateGameCard,
-  updateGameRule,
-  updateGameStatus
+  updateGameRule
 } from "../lib/games";
 
 const CARD_PAGE_SIZE = 20;
@@ -322,7 +325,8 @@ export default function GamesPage({ canManageGames, ConfirmModal, showToast }) {
   const [pillarFilter, setPillarFilter] = useState("all");
   const [selectedGame, setSelectedGame] = useState(null);
   const [addGameOpen, setAddGameOpen] = useState(false);
-  const [statusTarget, setStatusTarget] = useState(null);
+  const [accessGame, setAccessGame] = useState(null);
+  const [deleteTarget, setDeleteTarget] = useState(null);
   const [refreshKey, setRefreshKey] = useState(0);
 
   useEffect(() => {
@@ -360,25 +364,49 @@ export default function GamesPage({ canManageGames, ConfirmModal, showToast }) {
     });
   }, [games, search, statusFilter, pillarFilter]);
 
-  async function confirmStatusChange() {
-    const target = statusTarget;
-    if (!target) return;
-    const updatedGame = await updateGameStatus(target.id, !target.is_active);
-    setGames((current) => current.map((game) => game.id === updatedGame.id
-      ? { ...game, ...updatedGame }
-      : game));
-    setSelectedGame((current) => current?.id === updatedGame.id
-      ? { ...current, ...updatedGame }
-      : current);
-    await logAdminAction({
-      action: "game_status_changed",
-      targetType: "game",
-      targetId: updatedGame.id,
-      targetName: updatedGame.title,
-      details: { status: updatedGame.is_active ? "Activated" : "Deactivated" }
-    });
-    showToast(`${updatedGame.title} ${updatedGame.is_active ? "activated" : "deactivated"} successfully.`, "success");
-    return true;
+  async function changeGlobalGameAccess(game, isLocked) {
+    try {
+      const updatedGame = await updateGameAccess(game.id, isLocked);
+      setGames((current) => current.map((item) => item.id === updatedGame.id
+        ? { ...item, ...updatedGame }
+        : item));
+      setSelectedGame((current) => current?.id === updatedGame.id
+        ? { ...current, ...updatedGame }
+        : current);
+      await logAdminAction({
+        action: "game_access_changed",
+        targetType: "game",
+        targetId: updatedGame.id,
+        targetName: updatedGame.title,
+        details: { access: isLocked ? "Locked" : "Free" }
+      });
+      showToast(`${updatedGame.title} is now ${isLocked ? "locked" : "free"}.`, "success");
+    } catch (accessError) {
+      showToast(accessError.message || "Unable to update game access.", "error");
+    }
+  }
+
+  async function confirmGameDeletion() {
+    if (!deleteTarget) return false;
+
+    try {
+      await deleteGame(deleteTarget.id);
+      await logAdminAction({
+        action: "game_deleted",
+        targetType: "game",
+        targetId: deleteTarget.id,
+        targetName: deleteTarget.title
+      });
+      setSelectedGame((current) => current?.id === deleteTarget.id ? null : current);
+      setAccessGame((current) => current?.id === deleteTarget.id ? null : current);
+      setDeleteTarget(null);
+      setRefreshKey((current) => current + 1);
+      showToast(`${deleteTarget.title} deleted successfully.`, "success");
+      return true;
+    } catch (deleteError) {
+      showToast(deleteError.message || "Unable to delete this game.", "error");
+      throw deleteError;
+    }
   }
 
   if (!canManageGames) {
@@ -390,7 +418,7 @@ export default function GamesPage({ canManageGames, ConfirmModal, showToast }) {
       <div className="page-heading">
         <div>
           <h3>Games</h3>
-          <p className="muted">Manage game information and review rules, cards, and placements.</p>
+          <p className="muted">Manage the games stored in Heartshapers.</p>
         </div>
         <button type="button" className="primary-btn" onClick={() => setAddGameOpen(true)}>
           <Plus size={18} /> Add Game
@@ -400,7 +428,7 @@ export default function GamesPage({ canManageGames, ConfirmModal, showToast }) {
       <div className="toolbar games-toolbar">
         <div className="search-box">
           <Search size={18} />
-          <input value={search} onChange={(event) => setSearch(event.target.value)} placeholder="Search games or types..." />
+          <input value={search} onChange={(event) => setSearch(event.target.value)} placeholder="Search games..." />
         </div>
         <div className="select-box">
           <select value={statusFilter} onChange={(event) => setStatusFilter(event.target.value)} aria-label="Filter games by status">
@@ -431,8 +459,8 @@ export default function GamesPage({ canManageGames, ConfirmModal, showToast }) {
           </div>
         ) : (
           <div className="table-wrap">
-            <table className="games-table">
-              <thead><tr><th>Game</th><th>Game Type</th><th>Cards</th><th>Status</th><th>Placements</th><th>Actions</th></tr></thead>
+            <table>
+              <thead><tr><th>Game</th><th>Game Type</th><th>Cards</th><th>Status</th><th>Access</th><th className="games-placements-cell">Placements</th><th></th></tr></thead>
               <tbody>
                 {filteredGames.map((game) => (
                   <tr key={game.id}>
@@ -440,11 +468,31 @@ export default function GamesPage({ canManageGames, ConfirmModal, showToast }) {
                     <td><code>{game.game_type}</code></td>
                     <td>{game.cardCount}</td>
                     <td><StatusBadge active={game.is_active} /></td>
-                    <td>{game.placementCount}</td>
-                    <td><div className="games-actions">
-                      <button type="button" className="secondary-btn small" onClick={() => setSelectedGame(game)}><Eye size={15} /> View / Edit</button>
-                      <button type="button" className={`secondary-btn small ${game.is_active ? "danger" : ""}`} onClick={() => setStatusTarget(game)}>{game.is_active ? "Deactivate" : "Activate"}</button>
-                    </div></td>
+                    <td>
+                      <select
+                        className={`user-access-status-select status ${game.is_locked ? "locked" : "free"}`}
+                        value={game.is_locked ? "locked" : "free"}
+                        onChange={(event) => changeGlobalGameAccess(game, event.target.value === "locked")}
+                        aria-label={`Default access for ${game.title}`}
+                      >
+                        <option value="free">Free</option>
+                        <option value="locked">Locked</option>
+                      </select>
+                    </td>
+                    <td className="games-placements-cell">{game.placementCount}</td>
+                    <td>
+                      <div className="actions">
+                        <button type="button" className="icon-btn" title="View / Edit" aria-label={`View or edit ${game.title}`} onClick={() => setSelectedGame(game)}>
+                          <Pencil size={17} />
+                        </button>
+                        <button type="button" className="icon-btn" title="User Access" aria-label={`Manage user access for ${game.title}`} onClick={() => setAccessGame(game)}>
+                          <Users size={17} />
+                        </button>
+                        <button type="button" className="icon-btn danger" title="Delete" aria-label={`Delete ${game.title}`} onClick={() => setDeleteTarget(game)}>
+                          <Trash2 size={17} />
+                        </button>
+                      </div>
+                    </td>
                   </tr>
                 ))}
               </tbody>
@@ -506,20 +554,165 @@ export default function GamesPage({ canManageGames, ConfirmModal, showToast }) {
           showToast={showToast}
         />
       )}
-      {statusTarget && (
+      {accessGame && (
+        <GameUserAccessModal
+          key={accessGame.id}
+          game={accessGame}
+          onClose={() => setAccessGame(null)}
+          showToast={showToast}
+        />
+      )}
+      {deleteTarget && (
         <ConfirmModal
-          title={statusTarget.is_active ? "Deactivate Game?" : "Activate Game?"}
-          message={statusTarget.is_active
-            ? `Are you sure you want to deactivate ${statusTarget.title}? Deactivated games will no longer be available to the mobile application.`
-            : `Are you sure you want to activate ${statusTarget.title}?`}
-          actionLabel={statusTarget.is_active ? "Deactivate" : "Activate"}
-          busyLabel={statusTarget.is_active ? "Deactivating..." : "Activating..."}
-          tone={statusTarget.is_active ? "danger" : "success"}
-          onClose={() => setStatusTarget(null)}
-          onConfirm={confirmStatusChange}
+          title="Delete Game?"
+          message={`Are you sure you want to delete "${deleteTarget.title || "Untitled"}"?`}
+          secondaryMessage="This may permanently remove its associated rules, cards, placements, and user access settings. Any remaining game storage assets prevent deletion."
+          actionLabel="Delete"
+          busyLabel="Deleting..."
+          tone="danger"
+          onClose={() => setDeleteTarget(null)}
+          onConfirm={confirmGameDeletion}
         />
       )}
     </>
+  );
+}
+
+function GameUserAccessModal({ game, onClose, showToast }) {
+  const showToastRef = useRef(showToast);
+  showToastRef.current = showToast;
+  const [users, setUsers] = useState([]);
+  const [accessOverrides, setAccessOverrides] = useState(() => new Map());
+  const [loading, setLoading] = useState(true);
+  const [loadError, setLoadError] = useState(false);
+  const [search, setSearch] = useState("");
+  const [updatingUserIds, setUpdatingUserIds] = useState(() => new Set());
+
+  useEffect(() => {
+    let active = true;
+
+    getGameUserAccess(game.id)
+      .then((access) => {
+        if (!active) return;
+        setUsers(access.users);
+        setAccessOverrides(new Map(access.accessOverrides.map((entry) => [
+          entry.user_id,
+          entry.access_status
+        ])));
+      })
+      .catch((error) => {
+        console.error("Unable to load game user access.", {
+          code: error?.code || error?.name || "GAME_ACCESS_LOAD_FAILED"
+        });
+        if (active) {
+          setLoadError(true);
+          showToastRef.current("Unable to load game user access information.", "error");
+        }
+      })
+      .finally(() => {
+        if (active) setLoading(false);
+      });
+
+    return () => {
+      active = false;
+    };
+  }, [game.id]);
+
+  async function changeUserAccess(user, accessStatus) {
+    if (updatingUserIds.has(user.id)) return;
+    setUpdatingUserIds((current) => new Set(current).add(user.id));
+    try {
+      const savedStatus = await updateGameUserAccess({
+        gameId: game.id,
+        userId: user.id,
+        accessStatus
+      });
+      setAccessOverrides((current) => new Map(current).set(user.id, savedStatus));
+      showToastRef.current("Game user access updated successfully.", "success");
+    } catch (error) {
+      showToastRef.current(error.message || "Unable to update game user access.", "error");
+    } finally {
+      setUpdatingUserIds((current) => {
+        const next = new Set(current);
+        next.delete(user.id);
+        return next;
+      });
+    }
+  }
+
+  const query = search.trim().toLowerCase();
+  const visibleUsers = users.filter((user) =>
+    !query || `${user.full_name || ""} ${user.email || ""}`.toLowerCase().includes(query)
+  );
+
+  return (
+    <div className="modal-backdrop">
+      <div className="modal user-access-modal" role="dialog" aria-modal="true" aria-labelledby="game-user-access-title">
+        <div className="modal-header">
+          <div>
+            <h3 id="game-user-access-title">User Access</h3>
+            <p className="muted">{game.title}</p>
+          </div>
+          <button type="button" className="icon-btn" onClick={onClose} aria-label="Close game user access">
+            <X size={20} />
+          </button>
+        </div>
+        <div className="user-access-content">
+          {loading ? (
+            <div className="empty-state small-empty"><Loader2 className="spin" size={18} /> Loading user access...</div>
+          ) : loadError ? (
+            <div className="empty-state small-empty">Access data is unavailable. Close and reopen this dialog to retry.</div>
+          ) : users.length === 0 ? (
+            <div className="empty-state small-empty">No registered users found.</div>
+          ) : (
+            <>
+              <div className="user-access-toolbar">
+                <div className="search-box user-access-search">
+                  <Search size={18} />
+                  <input
+                    type="search"
+                    value={search}
+                    onChange={(event) => setSearch(event.target.value)}
+                    placeholder="Search users..."
+                    aria-label="Search users by name or email"
+                  />
+                </div>
+              </div>
+              {visibleUsers.length === 0 ? (
+                <div className="empty-state small-empty">No users match this search.</div>
+              ) : (
+                <div className="user-access-list" role="list">
+                  <div className="user-access-row user-access-heading" aria-hidden="true">
+                    <span>User</span>
+                    <span>Email</span>
+                    <span>Access</span>
+                  </div>
+                  {visibleUsers.map((user) => {
+                    const status = accessOverrides.get(user.id) || (game.is_locked ? "locked" : "free");
+                    return (
+                      <div className="user-access-row" role="listitem" key={user.id}>
+                        <strong>{user.full_name || "Unnamed user"}</strong>
+                        <span className="user-access-email">{user.email || "—"}</span>
+                        <select
+                          className={`user-access-status-select status ${status}`}
+                          value={status}
+                          disabled={updatingUserIds.has(user.id)}
+                          onChange={(event) => changeUserAccess(user, event.target.value)}
+                          aria-label={`Access status for ${user.full_name || user.email} for ${game.title}`}
+                        >
+                          <option value="locked">Locked</option>
+                          <option value="free">Free</option>
+                        </select>
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
+            </>
+          )}
+        </div>
+      </div>
+    </div>
   );
 }
 

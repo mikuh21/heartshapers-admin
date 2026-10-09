@@ -156,6 +156,42 @@ export async function updateBookUserAccess({ bookId, userId, accessStatus }) {
   return data?.accessStatus;
 }
 
+export async function getGameUserAccess(gameId) {
+  const { data, error } = await supabase.functions.invoke(ADMIN_USERS_FUNCTION, {
+    body: { action: "game-access", gameId }
+  });
+
+  if (error || data?.error) {
+    console.error("Game user access request failed.", {
+      code: error?.code || error?.name || data?.code || "GAME_ACCESS_FAILED",
+      message: data?.error || error?.message || "Unknown function error"
+    });
+    throw new Error("Unable to load game user access information.");
+  }
+
+  return {
+    game: data.game,
+    users: (data.users || []).map(normalizeUser),
+    accessOverrides: data.accessOverrides || []
+  };
+}
+
+export async function updateGameUserAccess({ gameId, userId, accessStatus }) {
+  const { data, error } = await supabase.functions.invoke(ADMIN_USERS_FUNCTION, {
+    body: { action: "set-game-access", gameId, userId, accessStatus }
+  });
+
+  if (error || data?.error) {
+    console.error("Game user access update failed.", {
+      code: error?.code || error?.name || data?.code || "GAME_ACCESS_UPDATE_FAILED",
+      message: data?.error || error?.message || "Unknown function error"
+    });
+    throw new Error("Unable to update game user access.");
+  }
+
+  return data?.accessStatus;
+}
+
 export async function updateUserStatus(userId, disabled) {
   const { data, error } = await supabase.functions.invoke(ADMIN_USERS_FUNCTION, {
     body: {

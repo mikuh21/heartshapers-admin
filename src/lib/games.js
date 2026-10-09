@@ -10,9 +10,10 @@ export async function createGame(game) {
       subtitle: game.subtitle || null,
       description: game.description || null,
       sort_order: game.sort_order,
-      is_active: false
+      is_active: false,
+      is_locked: false
     })
-    .select("id,title,subtitle,description,cover_image_url,game_type,is_active,sort_order,created_at,updated_at")
+    .select("id,title,subtitle,description,cover_image_url,game_type,is_active,is_locked,sort_order,created_at,updated_at")
     .single();
 
   if (error?.code === "23505") {
@@ -33,7 +34,7 @@ export async function listGamesWithCounts() {
   ] = await Promise.all([
     supabase
       .from("games")
-      .select("id,title,subtitle,description,cover_image_url,game_type,is_active,sort_order,created_at,updated_at")
+      .select("id,title,subtitle,description,cover_image_url,game_type,is_active,is_locked,sort_order,created_at,updated_at")
       .order("sort_order", { ascending: true }),
     supabase.from("pillars").select("id,name").order("name", { ascending: true }),
     supabase.from("game_placements").select("game_id,pillar_id")
@@ -140,7 +141,7 @@ export async function updateGameInformation(gameId, changes) {
       sort_order: changes.sort_order
     })
     .eq("id", gameId)
-    .select("id,title,subtitle,description,cover_image_url,game_type,is_active,sort_order,created_at,updated_at")
+    .select("id,title,subtitle,description,cover_image_url,game_type,is_active,is_locked,sort_order,created_at,updated_at")
     .single();
 
   if (error) throw error;
@@ -152,10 +153,59 @@ export async function updateGameStatus(gameId, isActive) {
     .from("games")
     .update({ is_active: isActive })
     .eq("id", gameId)
-    .select("id,title,subtitle,description,cover_image_url,game_type,is_active,sort_order,created_at,updated_at")
+    .select("id,title,subtitle,description,cover_image_url,game_type,is_active,is_locked,sort_order,created_at,updated_at")
     .single();
 
   if (error) throw error;
+  return data;
+}
+
+export async function updateGameAccess(gameId, isLocked) {
+  const { data, error } = await supabase
+    .from("games")
+    .update({ is_locked: isLocked })
+    .eq("id", gameId)
+    .select("id,title,is_active,is_locked")
+    .single();
+
+  if (error) throw error;
+  return data;
+}
+
+export async function deleteGame(gameId) {
+  const { data: assets, error: assetError } = await supabase.storage
+    .from("game-assets")
+    .list(`games/${gameId}`, { limit: 1 });
+
+  if (assetError) {
+    console.error("Unable to check game assets before deletion.", {
+      gameId,
+      code: assetError.code || "GAME_ASSET_CHECK_FAILED"
+    });
+    throw new Error("Unable to safely check this game's associated assets. The game was not deleted.");
+  }
+  if (assets?.length) {
+    throw new Error("This game still has associated storage assets. Remove those assets before deleting the game.");
+  }
+
+  const { data, error } = await supabase
+    .from("games")
+    .delete()
+    .eq("id", gameId)
+    .select("id")
+    .maybeSingle();
+
+  if (error) {
+    console.error("Game deletion failed.", {
+      gameId,
+      code: error.code || "GAME_DELETE_FAILED"
+    });
+    throw new Error("Unable to delete this game. Its game data was left unchanged.");
+  }
+  if (!data) {
+    throw new Error("This game could not be found or you do not have permission to delete it.");
+  }
+
   return data;
 }
 

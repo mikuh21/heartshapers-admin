@@ -152,8 +152,41 @@ async function listAllRowsForBook(adminClient: any, table: string, columns: stri
   return rows;
 }
 
+async function listAllRowsForGame(adminClient: any, columns: string, gameId: string) {
+  const rows: any[] = [];
+  const perPage = 1000;
+  let from = 0;
+
+  while (true) {
+    const { data, error } = await adminClient
+      .from("user_game_access")
+      .select(columns)
+      .eq("game_id", gameId)
+      .order("user_id", { ascending: true })
+      .range(from, from + perPage - 1);
+    if (error) throw error;
+
+    const pageRows = data || [];
+    rows.push(...pageRows);
+    if (pageRows.length < perPage) break;
+    from += perPage;
+  }
+
+  return rows;
+}
+
 function logBookAccessFailure(operation: string, table: string, error: any) {
   console.error("Book access data request failed.", {
+    operation,
+    table,
+    code: error?.code || null,
+    message: error?.message || "Unknown backend error",
+    status: error?.status || error?.statusCode || null
+  });
+}
+
+function logGameAccessFailure(operation: string, table: string, error: any) {
+  console.error("Game access data request failed.", {
     operation,
     table,
     code: error?.code || null,
@@ -393,6 +426,102 @@ Deno.serve(async (req: Request): Promise<Response> => {
         targetType: "book",
         targetId: bookId,
         targetName: book.title,
+        details: {
+          user_name: targetUser.user_metadata?.full_name || targetUser.email || "User",
+          user_email: targetUser.email || null,
+          status: accessStatus === "free" ? "Free" : "Locked"
+        }
+      });
+
+      return jsonResponse({ accessStatus });
+    }
+
+    if (action === "game-access") {
+      const gameId = String(body?.gameId || "").trim();
+      if (!gameId) return jsonResponse({ error: "A game ID is required." }, 400);
+
+      let normalUsers;
+      try {
+        normalUsers = await listAllNormalUsers(adminClient);
+      } catch (error) {
+        logGameAccessFailure("list normal Auth users", "auth.users", error);
+        return jsonResponse({ error: "Unable to load game user access information." }, 500);
+      }
+
+      const { data: game, error: gameError } = await adminClient
+        .from("games")
+        .select("id,title,is_locked")
+        .eq("id", gameId)
+        .maybeSingle();
+      if (gameError) {
+        logGameAccessFailure("read selected game", "games", gameError);
+        return jsonResponse({ error: "Unable to load game user access information." }, 500);
+      }
+      if (!game) {
+        return jsonResponse({ error: "Unable to load game user access information." }, 404);
+      }
+
+      let overrides;
+      try {
+        overrides = await listAllRowsForGame(adminClient, "user_id, access_status", gameId);
+      } catch (error) {
+        logGameAccessFailure("read overrides for selected game", "user_game_access", error);
+        return jsonResponse({ error: "Unable to load game user access information." }, 500);
+      }
+
+      return jsonResponse({
+        game: { id: game.id, title: game.title, is_locked: Boolean(game.is_locked) },
+        users: normalUsers.map(normalizeUser),
+        accessOverrides: (overrides || []).map((override: any) => ({
+          user_id: override.user_id,
+          access_status: override.access_status
+        }))
+      });
+    }
+
+    if (action === "set-game-access") {
+      const gameId = String(body?.gameId || "").trim();
+      const userId = String(body?.userId || "").trim();
+      const accessStatus = String(body?.accessStatus || "").trim().toLowerCase();
+
+      if (!gameId || !userId || !["free", "locked"].includes(accessStatus)) {
+        return jsonResponse({ error: "A game, user, and valid access status are required." }, 400);
+      }
+
+      const [{ data: targetData, error: targetError }, { data: game, error: gameError }] = await Promise.all([
+        adminClient.auth.admin.getUserById(userId),
+        adminClient.from("games").select("id, title").eq("id", gameId).maybeSingle()
+      ]);
+      const targetUser = targetData?.user;
+      const targetRole = getRole(targetUser) || "user";
+      if (targetError || !targetUser || targetRole !== "user") {
+        return jsonResponse({ error: "Unable to update game user access." }, 404);
+      }
+      if (gameError || !game) {
+        return jsonResponse({ error: "Unable to update game user access." }, 404);
+      }
+
+      const { error: updateError } = await adminClient
+        .from("user_game_access")
+        .upsert({
+          user_id: userId,
+          game_id: gameId,
+          access_status: accessStatus,
+          granted_by: user.id,
+          updated_at: new Date().toISOString()
+        }, { onConflict: "user_id,game_id" });
+
+      if (updateError) {
+        console.error("Unable to update per-user game access.", { code: updateError.code || "ACCESS_UPDATE_FAILED" });
+        return jsonResponse({ error: "Unable to update game user access." }, 500);
+      }
+
+      await insertAdminAuditLog(adminClient, {
+        action: "game_user_access_updated",
+        actorEmail: user.email,
+        targetType: "game",
+        targetId: gameId,
+        targetName: game.title,
         details: {
           user_name: targetUser.user_metadata?.full_name || targetUser.email || "User",
           user_email: targetUser.email || null,

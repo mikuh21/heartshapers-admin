@@ -268,6 +268,7 @@ td { padding: 13px 17px; border-top: 1px solid #eef0f3; font-size: 13px; }
 .games-name-cell img, .games-name-cell .cover-placeholder { width: 42px; height: 56px; flex: 0 0 auto; border-radius: 5px; object-fit: cover; }
 .games-name-cell strong, .games-name-cell span { display: block; }
 .games-name-cell span { margin-top: 3px; color: #8a93a3; font-size: 11px; }
+.games-placements-cell { text-align: center; vertical-align: middle; }
 .games-table { min-width: 900px; }
 .games-table code, .games-readonly-fields code { color: #525b68; font-size: 12px; overflow-wrap: anywhere; }
 .games-actions { display: flex; justify-content: flex-start; gap: 6px; white-space: nowrap; }
