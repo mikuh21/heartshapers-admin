@@ -256,11 +256,26 @@ td { padding: 13px 17px; border-top: 1px solid #eef0f3; font-size: 13px; }
 .status.pending { background: #fff8e6; color: #946200; }
 .status.rejected { background: #fff1f0; color: #b42318; }
 
-.payment-modal { max-width: 760px; }
+.payment-modal { max-width: 760px; display: flex; flex-direction: column; overflow: hidden; }
+.payment-modal .modal-body { min-height: 0; overflow-y: auto; overscroll-behavior: contain; }
 .detail-grid { display: grid; grid-template-columns: repeat(2, 1fr); gap: 14px; margin-bottom: 20px; }
-.detail-grid > div { display: grid; gap: 4px; padding: 13px; background: #fafbfc; border: 1px solid #eef0f3; border-radius: 8px; }
+.detail-grid > div { display: grid; gap: 4px; min-width: 0; padding: 13px; background: #fafbfc; border: 1px solid #eef0f3; border-radius: 8px; overflow-wrap: anywhere; }
+.detail-grid .submitted-status { justify-self: start; width: fit-content; }
 .detail-grid strong { font-size: 14px; }
-.payment-proof { display: block; width: 100%; max-height: 360px; object-fit: contain; background: #fafbfc; border: 1px solid #e7e9ef; border-radius: 8px; margin: 8px 0 18px; }
+.payment-product-title { font-weight: 650; }
+.payment-proof-viewer { min-width: 0; margin: 0 0 10px; }
+.payment-proof-controls { display: flex; align-items: center; justify-content: flex-end; gap: 7px; margin: 8px 0; }
+.proof-zoom-button { min-width: 34px; min-height: 34px; padding: 7px 9px; }
+.proof-zoom-button:disabled { opacity: .5; cursor: not-allowed; }
+.proof-zoom-level { min-width: 45px; color: #687385; font-size: 12px; text-align: center; font-variant-numeric: tabular-nums; }
+.payment-proof-viewport {
+  display: grid; place-items: center; width: 100%; height: min(360px, 42vh); min-height: 180px;
+  overflow: hidden; background: #fafbfc; border: 1px solid #e7e9ef; border-radius: 8px;
+  touch-action: none; user-select: none;
+}
+.payment-proof-viewport.is-zoomed { cursor: grab; }
+.payment-proof-viewport.is-dragging { cursor: grabbing; }
+.payment-proof-image { display: block; flex: none; object-fit: contain; transform-origin: center; pointer-events: none; }
 .settings-qr-preview { display: block; width: 180px; max-width: 100%; height: 180px; box-sizing: border-box; object-fit: contain; border: 1px solid #e7e9ef; border-radius: 8px; margin-top: 10px; }
 
 .games-toolbar { flex-wrap: wrap; }
@@ -667,7 +682,7 @@ td { padding: 13px 17px; border-top: 1px solid #eef0f3; font-size: 13px; }
   width: min(410px, 100%); background: white; border: 1px solid #e5e8ed;
   border-radius: 14px; padding: 32px; box-shadow: 0 12px 40px rgba(20,25,30,.06);
 }
-.login-card .brand-mark { margin: 0 auto 14px; }
+.login-logo { display: block; width: 72px; height: 72px; object-fit: contain; margin: 0 auto 14px; }
 .login-card h1 { text-align: center; margin: 0; font-size: 25px; }
 .login-card > .muted { text-align: center; margin: 5px 0 26px; }
 .login-form { display: grid; gap: 8px; }
@@ -675,6 +690,8 @@ td { padding: 13px 17px; border-top: 1px solid #eef0f3; font-size: 13px; }
 .login-form input {
   border: 1px solid #dfe3ea; border-radius: 8px; padding: 11px; outline: 0;
 }
+.login-password-field { width: 100%; }
+.login-password-field input { width: 100%; box-sizing: border-box; }
 .login-form input:focus { border-color: #89929e; }
 .login-form .primary-btn { margin-top: 9px; }
 
@@ -699,6 +716,11 @@ td { padding: 13px 17px; border-top: 1px solid #eef0f3; font-size: 13px; }
 }
 
 @media (max-width: 600px) {
+  .modal-backdrop { padding: 12px; }
+  .payment-modal { max-height: calc(100vh - 24px); }
+  .payment-modal .modal-header, .payment-modal .modal-footer { padding-left: 16px; padding-right: 16px; }
+  .payment-modal .modal-body { padding: 16px; }
+  .payment-proof-viewport { height: min(320px, 40vh); min-height: 160px; }
   .games-toolbar { align-items: stretch; }
   .games-toolbar .select-box, .games-toolbar .select-box select { width: 100%; }
   .games-detail-body { padding: 16px; }

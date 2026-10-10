@@ -1,4 +1,5 @@
 import React, { createContext, useContext, useEffect, useMemo, useRef, useState } from "react";
+import { flushSync } from "react-dom";
 import {
   BookOpen,
   LayoutDashboard,
@@ -23,7 +24,10 @@ import {
   EyeOff,
   AlertTriangle,
   Receipt,
-  Gamepad2
+  Gamepad2,
+  ZoomIn,
+  ZoomOut,
+  RotateCcw
 } from "lucide-react";
 import { supabase, COVER_BUCKET, PDF_BUCKET } from "./lib/supabase";
 import { logAdminAction } from "./lib/adminAudit";
@@ -596,8 +600,52 @@ function App() {
 function Login() {
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
+  const [showPassword, setShowPassword] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
+  const passwordInputRef = useRef(null);
+  const pendingPasswordSelectionRef = useRef(null);
+  const passwordRestoreFrameRef = useRef(null);
+
+  function capturePasswordSelection() {
+    const input = passwordInputRef.current;
+    if (passwordRestoreFrameRef.current !== null && pendingPasswordSelectionRef.current) return;
+    pendingPasswordSelectionRef.current = input
+      ? {
+          wasFocused: input === document.activeElement,
+          start: input.selectionStart,
+          end: input.selectionEnd,
+          direction: input.selectionDirection
+        }
+      : null;
+  }
+
+  function togglePasswordVisibility(event) {
+    const input = passwordInputRef.current;
+    if (event.detail === 0 || !pendingPasswordSelectionRef.current) capturePasswordSelection();
+    const selection = pendingPasswordSelectionRef.current;
+
+    flushSync(() => setShowPassword((current) => !current));
+
+    if (passwordRestoreFrameRef.current !== null) {
+      cancelAnimationFrame(passwordRestoreFrameRef.current);
+    }
+    passwordRestoreFrameRef.current = requestAnimationFrame(() => {
+      passwordRestoreFrameRef.current = null;
+      if (pendingPasswordSelectionRef.current !== selection) return;
+      pendingPasswordSelectionRef.current = null;
+
+      if (input?.isConnected && selection?.wasFocused) {
+        if (document.activeElement !== input) input.focus({ preventScroll: true });
+        if (selection.start !== null && selection.end !== null) {
+          const valueLength = input.value.length;
+          const start = Math.min(selection.start, valueLength);
+          const end = Math.min(selection.end, valueLength);
+          input.setSelectionRange(start, end, selection.direction);
+        }
+      }
+    });
+  }
 
   async function handleLogin(e) {
     e.preventDefault();
@@ -646,7 +694,7 @@ function Login() {
   return (
     <div className="login-page">
       <div className="login-card">
-        <div className="brand-mark">H</div>
+        <img className="login-logo" src="/FINAL HEARTSHAPERS ICON.svg" alt="HeartShapers logo" />
         <h1>Heartshapers</h1>
         <p className="muted">Admin Management</p>
 
@@ -661,13 +709,29 @@ function Login() {
           />
 
           <label>Password</label>
-          <input
-            type="password"
-            value={password}
-            onChange={(e) => setPassword(e.target.value)}
-            placeholder="Enter password"
-            required
-          />
+          <div className="password-field login-password-field">
+            <input
+              ref={passwordInputRef}
+              type={showPassword ? "text" : "password"}
+              value={password}
+              onChange={(e) => setPassword(e.target.value)}
+              placeholder="Enter password"
+              required
+            />
+            <button
+              type="button"
+              className="password-toggle"
+              onPointerDown={(event) => {
+                if (event.button === 0) capturePasswordSelection();
+              }}
+              onMouseDown={(event) => event.preventDefault()}
+              onClick={togglePasswordVisibility}
+              aria-label={showPassword ? "Hide password" : "Show password"}
+              aria-pressed={showPassword}
+            >
+              {showPassword ? <EyeOff size={18} /> : <Eye size={18} />}
+            </button>
+          </div>
 
           {error && <div className="error-box">{error}</div>}
 
@@ -2314,7 +2378,7 @@ function AdminsPage() {
                   <tr key={admin.id}>
                     <td>{admin.full_name || "Unnamed admin"}</td>
                     <td>{admin.email || "—"}</td>
-                    <td>admin</td>
+                    <td>Admin</td>
                     <td>
                       <span className={`status ${admin.disabled ? "disabled" : "active"}`}>
                         {admin.disabled ? <Lock size={13} /> : <Unlock size={13} />}
@@ -2495,6 +2559,185 @@ function formatCurrency(value) {
   return `₱${Number(value || 0).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
 }
 
+function formatPaymentStatus(status) {
+  return status ? `${status.charAt(0).toUpperCase()}${status.slice(1)}` : "";
+}
+
+function clampProofOffset(offset, zoom, imageSize, viewportSize) {
+  const maxX = Math.max(0, (imageSize.width * zoom - viewportSize.width) / 2);
+  const maxY = Math.max(0, (imageSize.height * zoom - viewportSize.height) / 2);
+  return {
+    x: Math.max(-maxX, Math.min(maxX, offset.x)),
+    y: Math.max(-maxY, Math.min(maxY, offset.y))
+  };
+}
+
+function PaymentProofViewer({ src }) {
+  const [zoom, setZoom] = useState(1);
+  const [offset, setOffset] = useState({ x: 0, y: 0 });
+  const [dragging, setDragging] = useState(false);
+  const [fitSize, setFitSize] = useState(null);
+  const viewerRef = useRef(null);
+  const imageRef = useRef(null);
+  const pointersRef = useRef(new Map());
+  const dragRef = useRef(null);
+  const pinchRef = useRef(null);
+  const zoomRef = useRef(zoom);
+  const minZoom = 1;
+  const maxZoom = 5;
+  zoomRef.current = zoom;
+
+  function measureFitSize() {
+    const viewer = viewerRef.current;
+    const image = imageRef.current;
+    if (!viewer || !image?.naturalWidth || !image?.naturalHeight) return;
+    const bounds = viewer.getBoundingClientRect();
+    const scale = Math.min(bounds.width / image.naturalWidth, bounds.height / image.naturalHeight);
+    const measuredSize = {
+      width: image.naturalWidth * scale,
+      height: image.naturalHeight * scale
+    };
+    setFitSize(measuredSize);
+    setOffset((current) => clampProofOffset(current, zoomRef.current, measuredSize, bounds));
+  }
+
+  useEffect(() => {
+    const viewer = viewerRef.current;
+    if (!viewer) return undefined;
+    const resizeObserver = new ResizeObserver(measureFitSize);
+    resizeObserver.observe(viewer);
+    measureFitSize();
+    return () => resizeObserver.disconnect();
+  }, [src]);
+
+  function updateZoom(nextZoom, anchor) {
+    const boundedZoom = Math.max(minZoom, Math.min(maxZoom, nextZoom));
+    const bounds = viewerRef.current?.getBoundingClientRect();
+    if (!bounds || !fitSize?.width || !fitSize?.height) return;
+    const point = anchor || { x: 0, y: 0 };
+    const ratio = boundedZoom / zoom;
+    const nextOffset = {
+      x: point.x + (offset.x - point.x) * ratio,
+      y: point.y + (offset.y - point.y) * ratio
+    };
+    setZoom(boundedZoom);
+    setOffset(clampProofOffset(nextOffset, boundedZoom, fitSize, bounds));
+  }
+
+  function handlePointerDown(event) {
+    if (event.pointerType === "mouse" && event.button !== 0) return;
+    event.currentTarget.setPointerCapture(event.pointerId);
+    pointersRef.current.set(event.pointerId, { x: event.clientX, y: event.clientY });
+    const points = [...pointersRef.current.values()];
+    if (points.length === 2) {
+      const [first, second] = points;
+      pinchRef.current = {
+        distance: Math.hypot(second.x - first.x, second.y - first.y),
+        zoom,
+        offset,
+        midpoint: { x: (first.x + second.x) / 2, y: (first.y + second.y) / 2 }
+      };
+      dragRef.current = null;
+    } else if (zoom > minZoom) {
+      dragRef.current = { pointerId: event.pointerId, x: event.clientX, y: event.clientY };
+      setDragging(true);
+    }
+  }
+
+  function handlePointerMove(event) {
+    if (!pointersRef.current.has(event.pointerId)) return;
+    pointersRef.current.set(event.pointerId, { x: event.clientX, y: event.clientY });
+    const points = [...pointersRef.current.values()];
+    const bounds = viewerRef.current?.getBoundingClientRect();
+    if (!bounds) return;
+
+    if (pinchRef.current && points.length >= 2) {
+      const [first, second] = points;
+      const pinch = pinchRef.current;
+      const distance = Math.hypot(second.x - first.x, second.y - first.y);
+      const midpoint = { x: (first.x + second.x) / 2, y: (first.y + second.y) / 2 };
+      const boundedZoom = Math.max(minZoom, Math.min(maxZoom, pinch.zoom * distance / pinch.distance));
+      setZoom(boundedZoom);
+      setOffset(clampProofOffset({
+        x: pinch.offset.x + midpoint.x - pinch.midpoint.x,
+        y: pinch.offset.y + midpoint.y - pinch.midpoint.y
+      }, boundedZoom, fitSize, bounds));
+      return;
+    }
+
+    const drag = dragRef.current;
+    if (!drag || drag.pointerId !== event.pointerId) return;
+    const nextOffset = {
+      x: offset.x + event.clientX - drag.x,
+      y: offset.y + event.clientY - drag.y
+    };
+    dragRef.current = { pointerId: event.pointerId, x: event.clientX, y: event.clientY };
+    setOffset(clampProofOffset(nextOffset, zoom, fitSize, bounds));
+  }
+
+  function handlePointerUp(event) {
+    pointersRef.current.delete(event.pointerId);
+    if (pointersRef.current.size < 2) pinchRef.current = null;
+    if (dragRef.current?.pointerId === event.pointerId) {
+      dragRef.current = null;
+      setDragging(false);
+    }
+    if (pointersRef.current.size === 1 && zoom > minZoom) {
+      const [pointerId, point] = [...pointersRef.current.entries()][0];
+      dragRef.current = { pointerId, x: point.x, y: point.y };
+      setDragging(true);
+    }
+  }
+
+  function resetView() {
+    setZoom(minZoom);
+    setOffset({ x: 0, y: 0 });
+  }
+
+  return (
+    <div className="payment-proof-viewer">
+      <div className="payment-proof-controls" aria-label="Payment proof zoom controls">
+        <button type="button" className="secondary-btn small proof-zoom-button" onClick={() => updateZoom(zoom / 1.25)} disabled={zoom <= minZoom} aria-label="Zoom out" title="Zoom out">
+          <ZoomOut size={16} />
+        </button>
+        <span className="proof-zoom-level" aria-live="polite">{Math.round(zoom * 100)}%</span>
+        <button type="button" className="secondary-btn small proof-zoom-button" onClick={() => updateZoom(zoom * 1.25)} disabled={zoom >= maxZoom} aria-label="Zoom in" title="Zoom in">
+          <ZoomIn size={16} />
+        </button>
+        <button type="button" className="secondary-btn small proof-zoom-button" onClick={resetView} disabled={zoom === minZoom && offset.x === 0 && offset.y === 0} aria-label="Fit payment proof to view" title="Fit to view">
+          <RotateCcw size={15} />
+          <span>Fit</span>
+        </button>
+      </div>
+      <div
+        ref={viewerRef}
+        className={`payment-proof-viewport${zoom > minZoom ? " is-zoomed" : ""}${dragging ? " is-dragging" : ""}`}
+        onPointerDown={handlePointerDown}
+        onPointerMove={handlePointerMove}
+        onPointerUp={handlePointerUp}
+        onPointerCancel={handlePointerUp}
+        onLostPointerCapture={handlePointerUp}
+        aria-label="Payment proof image. Use the zoom controls; drag to pan when zoomed."
+      >
+        <img
+          ref={imageRef}
+          className="payment-proof-image"
+          src={src}
+          alt="Payment proof"
+          draggable="false"
+          onLoad={measureFitSize}
+          onDragStart={(event) => event.preventDefault()}
+          style={{
+            width: fitSize?.width || 0,
+            height: fitSize?.height || 0,
+            transform: `translate(${offset.x}px, ${offset.y}px) scale(${zoom})`
+          }}
+        />
+      </div>
+    </div>
+  );
+}
+
 function PaymentsPage({ canManagePayments }) {
   const { showToast } = useToast();
   const [payments, setPayments] = useState([]);
@@ -2592,7 +2835,7 @@ function PaymentsPage({ canManagePayments }) {
   return (
     <>
       <div className="page-heading">
-        <div><h3>Payments</h3><p className="muted">Review manual GCash payment submissions.</p></div>
+        <div><h3>Payments</h3><p className="muted">Review GCash payment submissions.</p></div>
       </div>
       <div className="toolbar">
         <div className="search-box"><Search size={18} /><input value={search} onChange={(event) => setSearch(event.target.value)} placeholder="Search payments..." /></div>
@@ -2603,12 +2846,12 @@ function PaymentsPage({ canManagePayments }) {
       <div className="table-card">
         {loading ? <div className="empty-state"><Loader2 className="spin" /> Loading payments...</div> : filtered.length === 0 ? <div className="empty-state"><Receipt size={34} /><strong>No {paymentCategory} payments found</strong><span>{status === "pending" ? "Pending submissions will appear here." : `No ${paymentCategory} submissions match the selected filters.`}</span></div> : (
           <div className="table-wrap"><table><thead><tr><th>Customer</th><th>{paymentCategory === "games" ? "Game" : "Book"}</th><th>Amount</th><th>Reference</th><th>Status</th><th>Submitted</th></tr></thead><tbody>
-            {filtered.map((payment) => { const user = userById.get(payment.user_id); return <tr key={payment.id} onClick={() => openPayment(payment)} className="clickable-row"><td><strong>{user?.full_name || "Unknown customer"}</strong><div className="muted">{user?.email || payment.user_id}</div></td><td>{getPaymentProduct(payment)?.title || `Unknown ${paymentCategory.slice(0, -1)}`}</td><td>{formatCurrency(payment.amount)}</td><td>{payment.reference_number}</td><td><span className={`status ${payment.status}`}>{payment.status}</span></td><td>{formatDate(payment.created_at)}</td></tr>; })}
+            {filtered.map((payment) => { const user = userById.get(payment.user_id); return <tr key={payment.id} onClick={() => openPayment(payment)} className="clickable-row"><td><strong>{user?.full_name || "Unknown customer"}</strong><div className="muted">{user?.email || payment.user_id}</div></td><td><span className="payment-product-title">{getPaymentProduct(payment)?.title || `Unknown ${paymentCategory.slice(0, -1)}`}</span></td><td>{formatCurrency(payment.amount)}</td><td>{payment.reference_number}</td><td><span className={`status ${payment.status}`}>{formatPaymentStatus(payment.status)}</span></td><td>{formatDate(payment.created_at)}</td></tr>; })}
           </tbody></table></div>
         )}
       </div>
-      {selected && <div className="modal-backdrop"><div className="modal payment-modal"><div className="modal-header"><div><h3>Payment Review</h3><p className="muted">{selected.status} submission</p></div><button className="icon-btn" onClick={() => setSelected(null)}><X size={20} /></button></div><div className="modal-body">
-        {(() => { const user = userById.get(selected.user_id); const product = getPaymentProduct(selected); return <><div className="detail-grid"><div><span className="muted">Customer</span><strong>{user?.full_name || "Unknown customer"}</strong><span>{user?.email || "—"}</span></div><div><span className="muted">{paymentCategory === "games" ? "Game" : "Book"}</span><strong>{product?.title || `Unknown ${paymentCategory.slice(0, -1)}`}</strong><span>{formatCurrency(product?.price)}</span></div><div><span className="muted">Amount paid</span><strong>{formatCurrency(selected.amount)}</strong><span>Ref: {selected.reference_number}</span></div><div><span className="muted">Submitted</span><strong>{formatDate(selected.created_at)}</strong><span className={`status ${selected.status}`}>{selected.status}</span></div></div><label>Payment proof</label>{proofUrl ? <img className="payment-proof" src={proofUrl} alt="Payment proof" /> : <div className="empty-state small-empty">Unable to load payment proof.</div>}{selected.status === "pending" && <><label>Admin note / rejection reason</label><textarea value={note} onChange={(event) => setNote(event.target.value)} rows={3} placeholder="Optional note for verification, required for rejection" /></>}{selected.admin_notes && selected.status !== "pending" && <p className="field-hint">Admin note: {selected.admin_notes}</p>}</>; })()}
+      {selected && <div className="modal-backdrop"><div className="modal payment-modal"><div className="modal-header"><div><h3>Payment Review</h3><p className="muted">{formatPaymentStatus(selected.status)} submission</p></div><button className="icon-btn" onClick={() => setSelected(null)}><X size={20} /></button></div><div className="modal-body">
+        {(() => { const user = userById.get(selected.user_id); const product = getPaymentProduct(selected); return <><div className="detail-grid"><div><span className="muted">Customer</span><strong>{user?.full_name || "Unknown customer"}</strong><span>{user?.email || "—"}</span></div><div><span className="muted">{paymentCategory === "games" ? "Game" : "Book"}</span><strong>{product?.title || `Unknown ${paymentCategory.slice(0, -1)}`}</strong><span>{formatCurrency(product?.price)}</span></div><div><span className="muted">Amount paid</span><strong>{formatCurrency(selected.amount)}</strong><span>Ref: {selected.reference_number}</span></div><div><span className="muted">Submitted</span><strong>{formatDate(selected.created_at)}</strong><span className={`status submitted-status ${selected.status}`}>{formatPaymentStatus(selected.status)}</span></div></div><label>Payment proof</label>{proofUrl ? <PaymentProofViewer key={selected.id} src={proofUrl} /> : <div className="empty-state small-empty">Unable to load payment proof.</div>}{selected.status === "pending" && <><label>Admin note / rejection reason</label><textarea value={note} onChange={(event) => setNote(event.target.value)} rows={3} placeholder="Optional note for verification, required for rejection" /></>}{selected.admin_notes && selected.status !== "pending" && <p className="field-hint">Admin note: {selected.admin_notes}</p>}</>; })()}
       </div>{selected.status === "pending" && <div className="modal-footer"><button className="secondary-btn danger" onClick={() => { if (!note.trim()) { showToast("Add a rejection reason first.", "error"); return; } review("reject"); }} disabled={busy}>Reject Payment</button><button className="primary-btn" onClick={() => review("verify")} disabled={busy}>{busy ? "Saving..." : "Verify Payment"}</button></div>}</div></div>}
     </>
   );
