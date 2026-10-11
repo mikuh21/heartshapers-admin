@@ -60,7 +60,8 @@ begin
   if nullif(trim(p_game ->> 'title'), '') is null
     or coalesce(p_game ->> 'id', '') !~ '^game-[a-z0-9]+(-[a-z0-9]+)*-[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$'
     or coalesce(p_game ->> 'sort_order', '') !~ '^[0-9]+$'
-    or coalesce(p_game ->> 'price', '') !~ '^[0-9]+([.][0-9]+)?$'
+    or coalesce(p_game ->> 'price', '') !~ '^[0-9]+([.][0-9]{1,2})?$'
+    or jsonb_typeof(p_game -> 'is_locked') is distinct from 'boolean'
   then
     raise exception 'The game title or generated game information is invalid.';
   end if;
@@ -124,7 +125,7 @@ begin
     p_game ->> 'source_pdf_path',
     (p_game ->> 'sort_order')::integer,
     (p_game ->> 'price')::numeric,
-    true
+    (p_game ->> 'is_locked')::boolean
   )
   returning * into created_game;
 

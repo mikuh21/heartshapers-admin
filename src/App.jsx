@@ -1545,6 +1545,12 @@ function BookModal({ book, onClose, onSaved }) {
     setForm((current) => ({ ...current, [field]: value }));
     setFieldErrors((current) => {
       if (!current[field]) return current;
+      if (field === "author" && !String(value ?? "").trim()) return current;
+      if (field === "price") {
+        const rawPrice = String(value ?? "").trim();
+        const price = Number(rawPrice);
+        if (!rawPrice || !Number.isFinite(price) || price < 0) return current;
+      }
       const next = { ...current };
       delete next[field];
       return next;
@@ -1614,14 +1620,15 @@ function BookModal({ book, onClose, onSaved }) {
     const author = typeof form.author === "string" ? form.author.trim() : "";
     const description = typeof form.description === "string" ? form.description.trim() : "";
     const keywords = normalizeKeywords(form.keywords);
-    const price = Number(form.price);
+    const rawPrice = String(form.price ?? "").trim();
+    const price = Number(rawPrice);
 
     const validPillarNames = managedSettings.pillars.map((pillar) => pillar.name);
     const validSubcategoryNames = activePillar ? activePillar.categories.map((category) => category.name) : [];
 
     if (!title) errors.title = "Title is required.";
     if (!author) errors.author = "Author is required.";
-    if (!Number.isFinite(price) || price < 0) errors.price = "Price must be zero or greater.";
+    if (!rawPrice || !Number.isFinite(price) || price < 0) errors.price = "Price is required and must be zero or greater.";
     if (!validPillarNames.includes(form.pillar)) errors.pillar = "Please select a valid pillar.";
     if (!validSubcategoryNames.includes(form.subcategory)) errors.subcategory = "Please select a valid subcategory.";
     if (isAdd && !coverFile) errors.cover = "Cover image is required.";
@@ -1776,29 +1783,29 @@ function BookModal({ book, onClose, onSaved }) {
             {error && <div className="error-box">{error}</div>}
             {settingError && <div className="error-box">{settingError}</div>}
 
-            <label>Book Title *</label>
+            <label>Book Title <span className="required-marker">*</span></label>
             <input value={form.title} onChange={(e) => update("title", e.target.value)} placeholder="Enter book title" aria-invalid={Boolean(fieldErrors.title)} />
             {fieldErrors.title && <div className="field-error">{fieldErrors.title}</div>}
 
-            <label>Author *</label>
+            <label>Author <span className="required-marker">*</span></label>
             <input value={form.author} onChange={(e) => update("author", e.target.value)} placeholder="Enter book author" aria-invalid={Boolean(fieldErrors.author)} />
             {fieldErrors.author && <div className="field-error">{fieldErrors.author}</div>}
 
-            <label>Pillar *</label>
+            <label>Pillar <span className="required-marker">*</span></label>
             <select value={form.pillar} onChange={(e) => update("pillar", e.target.value)} aria-invalid={Boolean(fieldErrors.pillar)}>
               <option value="">Select Pillar</option>
               {managedSettings.pillars.map((pillar) => <option key={pillar.id} value={pillar.name}>{pillar.name}</option>)}
             </select>
             {fieldErrors.pillar && <div className="field-error">{fieldErrors.pillar}</div>}
 
-            <label>Subcategory *</label>
+            <label>Subcategory <span className="required-marker">*</span></label>
             <select value={form.subcategory || ""} onChange={(e) => update("subcategory", e.target.value)} aria-invalid={Boolean(fieldErrors.subcategory)}>
               <option value="">Select Subcategory</option>
               {allowedCategories.map((option) => <option key={option} value={option}>{option}</option>)}
             </select>
             {fieldErrors.subcategory && <div className="field-error">{fieldErrors.subcategory}</div>}
 
-            <label>Description {isAdd ? "*" : ""}</label>
+            <label>Description {isAdd && <span className="required-marker">*</span>}</label>
             <textarea
               value={form.description || ""}
               onChange={(e) => update("description", e.target.value)}
@@ -1808,7 +1815,7 @@ function BookModal({ book, onClose, onSaved }) {
             />
             {fieldErrors.description && <div className="field-error">{fieldErrors.description}</div>}
 
-            <label>Keywords {isAdd ? "*" : ""}</label>
+            <label>Keywords {isAdd && <span className="required-marker">*</span>}</label>
             <input
               value={form.keywords || ""}
               onChange={(e) => update("keywords", e.target.value)}
@@ -1818,12 +1825,12 @@ function BookModal({ book, onClose, onSaved }) {
             <div className="field-hint">Separate keywords with commas.</div>
             {fieldErrors.keywords && <div className="field-error">{fieldErrors.keywords}</div>}
 
-            <label>Price (₱)</label>
+            <label>Price (₱) <span className="required-marker">*</span></label>
             <input
               type="number"
               min="0"
               step="0.01"
-              value={form.price ?? 0}
+              value={form.price ?? ""}
               onChange={(e) => update("price", e.target.value)}
               aria-invalid={Boolean(fieldErrors.price)}
             />
@@ -1883,7 +1890,7 @@ function BookModal({ book, onClose, onSaved }) {
 function FileInput({ label, accept, file, current, icon, onChange, error, required }) {
   return (
     <div>
-      <label>{label}{required ? " *" : ""}</label>
+      <label>{label}{required && <> <span className="required-marker">*</span></>}</label>
       <label className="file-input">
         <input type="file" accept={accept} onChange={(e) => onChange(e.target.files?.[0] || null)} />
         {icon}
@@ -2175,15 +2182,15 @@ function CreateUserModal({ onClose, onCreated }) {
           <div className="modal-body">
             {fieldErrors.submit && <div className="error-box">{fieldErrors.submit}</div>}
 
-            <label>Full Name *</label>
+            <label>Full Name <span className="required-marker">*</span></label>
             <input value={form.full_name} onChange={(e) => updateField("full_name", e.target.value)} placeholder="Enter full name" />
             {fieldErrors.full_name && <div className="field-error">{fieldErrors.full_name}</div>}
 
-            <label>Email *</label>
+            <label>Email <span className="required-marker">*</span></label>
             <input type="email" value={form.email} onChange={(e) => updateField("email", e.target.value)} placeholder="name@gmail.com" />
             {fieldErrors.email && <div className="field-error">{fieldErrors.email}</div>}
 
-            <label>Password *</label>
+            <label>Password <span className="required-marker">*</span></label>
             <div className="password-field">
               <input
                 type={showPassword ? "text" : "password"}
@@ -2197,7 +2204,7 @@ function CreateUserModal({ onClose, onCreated }) {
             </div>
             {fieldErrors.password && <div className="field-error">{fieldErrors.password}</div>}
 
-            <label>Confirm Password *</label>
+            <label>Confirm Password <span className="required-marker">*</span></label>
             <div className="password-field">
               <input
                 type={showConfirmPassword ? "text" : "password"}
@@ -2501,15 +2508,15 @@ function CreateAdminModal({ onClose, onCreated }) {
           <div className="modal-body">
             {fieldErrors.submit && <div className="error-box">{fieldErrors.submit}</div>}
 
-            <label>Full Name *</label>
+            <label>Full Name <span className="required-marker">*</span></label>
             <input value={form.full_name} onChange={(e) => updateField("full_name", e.target.value)} placeholder="Enter full name" />
             {fieldErrors.full_name && <div className="field-error">{fieldErrors.full_name}</div>}
 
-            <label>Email *</label>
+            <label>Email <span className="required-marker">*</span></label>
             <input type="email" value={form.email} onChange={(e) => updateField("email", e.target.value)} placeholder="admin@example.com" />
             {fieldErrors.email && <div className="field-error">{fieldErrors.email}</div>}
 
-            <label>Password *</label>
+            <label>Password <span className="required-marker">*</span></label>
             <div className="password-field">
               <input
                 type={showPassword ? "text" : "password"}
@@ -2523,7 +2530,7 @@ function CreateAdminModal({ onClose, onCreated }) {
             </div>
             {fieldErrors.password && <div className="field-error">{fieldErrors.password}</div>}
 
-            <label>Confirm Password *</label>
+            <label>Confirm Password <span className="required-marker">*</span></label>
             <div className="password-field">
               <input
                 type={showConfirmPassword ? "text" : "password"}

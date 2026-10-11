@@ -42,6 +42,13 @@ export async function createPdfGame(gameData, coverFile, sourcePdfFile, pageFile
   if (!Array.isArray(pageFiles) || pageFiles.length === 0) {
     throw new Error("Select at least one PDF page for the card deck.");
   }
+  const priceText = String(gameData.price ?? "");
+  if (!/^\d+(\.\d{1,2})?$/.test(priceText) || !Number.isFinite(Number(priceText)) || Number(priceText) < 0) {
+    throw new Error("Enter a valid price of zero or greater, with up to two decimal places.");
+  }
+  if (typeof gameData.is_locked !== "boolean") {
+    throw new Error("Choose whether the game is Free or Locked.");
+  }
   if (
     !sourcePdfFile
     || (sourcePdfFile.type !== "application/pdf" && !sourcePdfFile.name?.toLowerCase().endsWith(".pdf"))
@@ -90,7 +97,14 @@ export async function createPdfGame(gameData, coverFile, sourcePdfFile, pageFile
 
     const { data: game, error: publishError } = await supabase.rpc("create_pdf_game", {
       p_game: {
-        ...gameData,
+        id: gameData.id,
+        title: gameData.title,
+        game_type: "pdf_deck",
+        subtitle: gameData.subtitle || null,
+        description: gameData.description || null,
+        price: priceText,
+        is_locked: gameData.is_locked,
+        sort_order: gameData.sort_order,
         cover_image_url: coverPath,
         source_pdf_path: sourcePdfPath
       },
@@ -150,6 +164,15 @@ export async function createPdfGame(gameData, coverFile, sourcePdfFile, pageFile
       });
       throw new Error("Unable to publish the PDF game. Please try again.");
     }
+    if (game?.game_type !== "pdf_deck" || game?.cover_image_url !== coverPath) {
+      preserveUploadedAssets = true;
+      console.error("PDF game creation returned an unexpected field mapping.", {
+        gameId: gameData.id,
+        gameTypeCorrect: game?.game_type === "pdf_deck",
+        coverPathCorrect: game?.cover_image_url === coverPath
+      });
+      throw new Error("The database returned an invalid PDF game field mapping. Uploaded files were retained because the game may already have been created. Verify the database function and game record before retrying.");
+    }
     return game;
   } catch (error) {
     const cleanupErrors = [];
@@ -172,6 +195,225 @@ export async function createPdfGame(gameData, coverFile, sourcePdfFile, pageFile
   }
 }
 
+export async function downloadPdfGameSource(gameId, sourcePdfPath) {
+  if (
+    typeof gameId !== "string"
+    || typeof sourcePdfPath !== "string"
+    || !sourcePdfPath.startsWith(`games/${gameId}/source/`)
+  ) {
+    throw new Error("The PDF source path does not belong to this game.");
+  }
+
+  const { data, error } = await supabase.storage
+    .from("game-assets")
+    .download(sourcePdfPath);
+  if (error) {
+    throw new Error(`Unable to load the game's source PDF: ${error.message || "Unknown storage error"}`);
+  }
+  return data;
+}
+
+export async function updatePdfGame(gameData, { coverFile = null, sourcePdfFile = null, pageFiles = null }) {
+  if (
+    typeof gameData?.id !== "string"
+    || !gameData.id.trim()
+    || !gameData.title?.trim()
+  ) {
+    throw new Error("A valid PDF game and title are required.");
+  }
+  const priceText = String(gameData.price ?? "");
+  if (!/^\d+(\.\d{1,2})?$/.test(priceText) || !Number.isFinite(Number(priceText)) || Number(priceText) < 0) {
+    throw new Error("Enter a valid price of zero or greater, with up to two decimal places.");
+  }
+  if (typeof gameData.is_locked !== "boolean" || !Number.isInteger(Number(gameData.sort_order))) {
+    throw new Error("The game access setting or sort order is invalid.");
+  }
+  if (typeof gameData.rules !== "string" || !gameData.rules.trim()) {
+    throw new Error("Game rules are required.");
+  }
+  if (coverFile && !{
+    "image/jpeg": true,
+    "image/png": true,
+    "image/webp": true
+  }[coverFile.type]) {
+    throw new Error("Choose a JPEG, PNG, or WebP cover image.");
+  }
+  if (coverFile?.size > 10 * 1024 * 1024) {
+    throw new Error("Cover images must be 10 MB or smaller.");
+  }
+  if (sourcePdfFile && (
+    (sourcePdfFile.type !== "application/pdf" && !sourcePdfFile.name?.toLowerCase().endsWith(".pdf"))
+    || sourcePdfFile.size > 50 * 1024 * 1024
+  )) {
+    throw new Error("Choose a valid game content PDF no larger than 50 MB.");
+  }
+  if (sourcePdfFile && !Array.isArray(pageFiles)) {
+    throw new Error("Select card pages from the replacement PDF.");
+  }
+  if (pageFiles !== null && (!Array.isArray(pageFiles) || pageFiles.length === 0)) {
+    throw new Error("Select at least one PDF page for the card deck.");
+  }
+
+  const gamePrefix = `games/${gameData.id}/`;
+  const { data: oldCards, error: cardsError } = pageFiles === null
+    ? { data: [], error: null }
+    : await supabase
+      .from("game_cards")
+      .select("metadata")
+      .eq("game_id", gameData.id);
+  if (cardsError) {
+    throw new Error(`Unable to load existing PDF card assets before replacing them: ${cardsError.message || "Unknown error"}`);
+  }
+
+  const oldAssetPaths = [];
+  if (sourcePdfFile && gameData.source_pdf_path?.startsWith(gamePrefix)) {
+    oldAssetPaths.push(gameData.source_pdf_path);
+  }
+  if (pageFiles !== null) {
+    for (const card of oldCards || []) {
+      const path = card.metadata?.pdf_page_path;
+      if (typeof path === "string" && path.startsWith(`${gamePrefix}cards/`)) {
+        oldAssetPaths.push(path);
+      }
+    }
+  }
+
+  const storage = supabase.storage.from("game-assets");
+  const uploadedPaths = [];
+  const version = crypto.randomUUID();
+  const coverExtension = {
+    "image/jpeg": "jpg",
+    "image/png": "png",
+    "image/webp": "webp"
+  }[coverFile?.type];
+  const newCoverPath = coverFile
+    ? `${gamePrefix}cover/${version}.${coverExtension}`
+    : undefined;
+  const newSourcePath = sourcePdfFile
+    ? `${gamePrefix}source/${version}.pdf`
+    : undefined;
+  const cardRows = pageFiles === null
+    ? null
+    : pageFiles.map(({ pageNumber }, index) => {
+      const path = `${gamePrefix}cards/${version}/page-${String(index + 1).padStart(4, "0")}.png`;
+      return {
+        sort_order: index + 1,
+        front_text: "",
+        back_text: "",
+        metadata: {
+          pairs: [],
+          content_type: "pdf_page",
+          pdf_page_number: pageNumber,
+          pdf_page_path: path,
+          page_order: index + 1
+        }
+      };
+    });
+
+  try {
+    if (coverFile) {
+      const { error } = await storage.upload(newCoverPath, coverFile, {
+        contentType: coverFile.type,
+        upsert: false
+      });
+      if (error) throw error;
+      uploadedPaths.push(newCoverPath);
+    }
+
+    if (sourcePdfFile) {
+      const { error } = await storage.upload(newSourcePath, sourcePdfFile, {
+        contentType: "application/pdf",
+        upsert: false
+      });
+      if (error) throw error;
+      uploadedPaths.push(newSourcePath);
+    }
+
+    if (pageFiles !== null) {
+      for (let index = 0; index < pageFiles.length; index += 1) {
+        const path = cardRows[index].metadata.pdf_page_path;
+        const { error } = await storage.upload(path, pageFiles[index].blob, {
+          contentType: "image/png",
+          upsert: false
+        });
+        if (error) throw error;
+        uploadedPaths.push(path);
+      }
+    }
+
+    const { data, error } = await supabase.rpc("update_pdf_game", {
+      p_game: {
+        id: gameData.id,
+        title: gameData.title.trim(),
+        subtitle: gameData.subtitle?.trim() || null,
+        description: gameData.description?.trim() || null,
+        price: priceText,
+        is_locked: gameData.is_locked,
+        sort_order: Number(gameData.sort_order),
+        ...(newCoverPath ? { cover_image_url: newCoverPath } : {}),
+        ...(newSourcePath ? { source_pdf_path: newSourcePath } : {})
+      },
+      p_cards: cardRows,
+      p_rules: gameData.rules.trim()
+    });
+
+    if (error) {
+      if (!error.code) {
+        console.error("PDF game update outcome could not be confirmed.", {
+          gameId: gameData.id,
+          uploadedAssetCount: uploadedPaths.length
+        });
+        throw new Error("The save response was interrupted. The uploaded replacement assets were retained to avoid breaking a possibly completed update. Refresh the Games list and reopen the editor before retrying.");
+      }
+      throw error;
+    }
+
+    const pathsToRemove = [...new Set(oldAssetPaths)].filter((path) => !uploadedPaths.includes(path));
+    let assetCleanupWarning = false;
+    if (pathsToRemove.length > 0) {
+      const { error: cleanupError } = await storage.remove(pathsToRemove);
+      if (cleanupError) {
+        assetCleanupWarning = true;
+        console.error("Replaced PDF game assets could not be removed.", {
+          gameId: gameData.id,
+          count: pathsToRemove.length,
+          code: cleanupError.code || "ASSET_CLEANUP_FAILED"
+        });
+      }
+    }
+
+    return { ...data, assetCleanupWarning };
+  } catch (error) {
+    if (!error?.code && error?.message?.startsWith("The save response was interrupted.")) {
+      throw error;
+    }
+
+    const cleanupErrors = [];
+    const pathsToClean = uploadedPaths.filter((path) => path !== newCoverPath);
+    if (pathsToClean.length > 0) {
+      const { error: cleanupError } = await storage.remove(pathsToClean);
+      if (cleanupError) cleanupErrors.push(cleanupError);
+    }
+    const retainedCoverMessage = newCoverPath && uploadedPaths.includes(newCoverPath)
+      ? ` The replacement cover at "${newCoverPath}" was retained; the previously saved cover was not removed.`
+      : "";
+    if (cleanupErrors.length > 0) {
+      console.error("Failed PDF game update left temporary assets.", {
+        gameId: gameData.id,
+        uploadedAssetCount: uploadedPaths.length,
+        code: cleanupErrors[0].code || "ASSET_CLEANUP_FAILED"
+      });
+      throw new Error(`The PDF game was not updated, and some newly uploaded files could not be cleaned up. The existing game content remains active; contact an administrator before retrying.${retainedCoverMessage}`);
+    }
+    if (error instanceof Error && !error.code) throw error;
+    console.error("PDF game update failed.", {
+      gameId: gameData.id,
+      code: error?.code || "PDF_GAME_UPDATE_FAILED"
+    });
+    throw new Error(`Unable to save the PDF game. ${error?.message || "Please try again."}${retainedCoverMessage}`);
+  }
+}
+
 export async function listGamesWithCounts() {
   const [
     { data: games, error: gamesError },
@@ -191,14 +433,34 @@ export async function listGamesWithCounts() {
   if (placementsError) throw placementsError;
 
   const coverDisplays = await Promise.all((games || []).map(async (game) => {
-    if (!game.cover_image_url?.startsWith("games/")) {
-      return [game.id, game.cover_image_url];
+    const coverPath = game.cover_image_url?.trim();
+    if (!coverPath) return [game.id, null];
+
+    if (coverPath.startsWith("games/")) {
+      const { data, error } = await supabase.storage
+        .from("game-assets")
+        .createSignedUrl(coverPath, 3600);
+      if (error || !data?.signedUrl) {
+        console.error("Game cover URL could not be resolved.", {
+          gameId: game.id,
+          code: error?.code || "SIGNED_COVER_URL_UNAVAILABLE"
+        });
+        return [game.id, null];
+      }
+      return [game.id, data.signedUrl];
     }
-    const { data, error } = await supabase.storage
-      .from("game-assets")
-      .createSignedUrl(game.cover_image_url, 3600);
-    if (error) throw error;
-    return [game.id, data.signedUrl];
+
+    try {
+      const directUrl = new URL(coverPath);
+      if (directUrl.protocol === "https:" || directUrl.protocol === "http:") {
+        return [game.id, directUrl.href];
+      }
+    } catch {
+      console.error("Game cover value is not a valid URL or game-assets path.", {
+        gameId: game.id
+      });
+    }
+    return [game.id, null];
   }));
   const coverDisplayUrls = new Map(coverDisplays);
 
@@ -337,20 +599,203 @@ export async function updateGameAccess(gameId, isLocked, changes = {}) {
   return data;
 }
 
-export async function deleteGame(gameId) {
-  const { data: assets, error: assetError } = await supabase.storage
-    .from("game-assets")
-    .list(`games/${gameId}`, { limit: 1 });
-
-  if (assetError) {
-    console.error("Unable to check game assets before deletion.", {
-      gameId,
-      code: assetError.code || "GAME_ASSET_CHECK_FAILED"
-    });
-    throw new Error("Unable to safely check this game's associated assets. The game was not deleted.");
+export async function updateGameWithCover(gameId, isLocked, changes, coverFile = null) {
+  const coverExtension = {
+    "image/jpeg": "jpg",
+    "image/png": "png",
+    "image/webp": "webp"
+  }[coverFile?.type];
+  if (coverFile && !coverExtension) {
+    throw new Error("Choose a JPEG, PNG, or WebP cover image.");
   }
-  if (assets?.length) {
-    throw new Error("This game still has associated storage assets. Remove those assets before deleting the game.");
+  if (coverFile?.size > 10 * 1024 * 1024) {
+    throw new Error("Cover images must be 10 MB or smaller.");
+  }
+
+  const coverPath = coverFile
+    ? `games/${gameId}/cover/${crypto.randomUUID()}.${coverExtension}`
+    : null;
+  if (coverFile) {
+    const { error: uploadError } = await supabase.storage
+      .from("game-assets")
+      .upload(coverPath, coverFile, {
+        contentType: coverFile.type,
+        upsert: false
+      });
+    if (uploadError) {
+      throw new Error(`Unable to upload the new cover image: ${uploadError.message || "Storage upload failed."}`);
+    }
+  }
+
+  const { data, error } = await supabase
+    .from("games")
+    .update({
+      ...(changes.title !== undefined ? { title: changes.title } : {}),
+      ...(changes.subtitle !== undefined ? { subtitle: changes.subtitle || null } : {}),
+      ...(changes.description !== undefined ? { description: changes.description || null } : {}),
+      ...(changes.sort_order !== undefined ? { sort_order: changes.sort_order } : {}),
+      ...(changes.price !== undefined ? { price: Number(changes.price) || 0 } : {}),
+      ...(coverPath ? { cover_image_url: coverPath } : {}),
+      is_locked: isLocked
+    })
+    .eq("id", gameId)
+    .select("id,title,subtitle,description,cover_image_url,source_pdf_path,game_type,is_locked,price,sort_order,created_at,updated_at")
+    .single();
+
+  if (error) {
+    if (coverPath) {
+      console.error("Game update failed after uploading a new cover; the uploaded file was retained.", {
+        gameId,
+        code: error.code || "GAME_UPDATE_FAILED"
+      });
+      throw new Error(`Unable to save the game changes. The new cover was uploaded to "${coverPath}" and retained; the previously saved cover was not removed. ${error.message || "Please retry or contact an administrator."}`);
+    }
+    throw error;
+  }
+
+  let coverDisplayUrl = null;
+  if (data.cover_image_url?.startsWith("games/")) {
+    const { data: signedData, error: signedUrlError } = await supabase.storage
+      .from("game-assets")
+      .createSignedUrl(data.cover_image_url, 3600);
+    if (signedUrlError) {
+      console.error("Updated game cover URL could not be resolved.", {
+        gameId,
+        code: signedUrlError.code || "SIGNED_COVER_URL_UNAVAILABLE"
+      });
+    } else {
+      coverDisplayUrl = signedData?.signedUrl || null;
+    }
+  } else {
+    coverDisplayUrl = data.cover_image_url || null;
+  }
+
+  return { ...data, cover_display_url: coverDisplayUrl };
+}
+
+function describeGameDeletionError(error) {
+  const code = error?.code ? ` (${error.code})` : "";
+  return `${error?.message || "Unknown error"}${code}`;
+}
+
+async function listGameAssetPaths(storage, folder, rootPath) {
+  const paths = [];
+  const pageSize = 1000;
+  let offset = 0;
+
+  while (true) {
+    const { data: entries, error } = await storage.list(folder, {
+      limit: pageSize,
+      offset,
+      sortBy: { column: "name", order: "asc" }
+    });
+    if (error) {
+      throw new Error(`Unable to list game storage at "${folder}": ${describeGameDeletionError(error)}`);
+    }
+    if (!entries?.length) break;
+
+    for (const entry of entries) {
+      const name = entry?.name;
+      if (
+        typeof name !== "string"
+        || !name
+        || name === "."
+        || name === ".."
+        || /[\/\\\u0000-\u001f]/.test(name)
+      ) {
+        throw new Error(`Storage returned an invalid object name while listing "${folder}". No database records were deleted.`);
+      }
+
+      const path = `${folder}/${name}`;
+      if (entry.id === null) {
+        const nestedPaths = await listGameAssetPaths(storage, path, rootPath);
+        for (const nestedPath of nestedPaths) paths.push(nestedPath);
+      } else if (path.startsWith(`${rootPath}/`)) {
+        paths.push(path);
+      } else {
+        throw new Error("Storage returned an object outside the selected game's folder. Deletion was stopped.");
+      }
+    }
+
+    offset += entries.length;
+    if (entries.length < pageSize) break;
+  }
+
+  return paths;
+}
+
+async function assertGameHasNoProtectedRecords(gameId) {
+  for (const table of ["game_payment_submissions", "game_purchases"]) {
+    const { data, error } = await supabase
+      .from(table)
+      .select("id")
+      .eq("game_id", gameId)
+      .limit(1);
+
+    if (error) {
+      throw new Error(`Unable to check ${table} before deleting the game: ${describeGameDeletionError(error)}. No storage assets were removed.`);
+    }
+    if (data?.length) {
+      throw new Error(`This game has ${table === "game_purchases" ? "purchase" : "payment"} history that must be preserved. The game and its storage assets were not deleted.`);
+    }
+  }
+}
+
+export async function deleteGame(gameId) {
+  if (
+    typeof gameId !== "string"
+    || gameId !== gameId.trim()
+    || !/^[A-Za-z0-9][A-Za-z0-9_-]*$/.test(gameId)
+  ) {
+    throw new Error("The selected game ID is invalid. No data was changed.");
+  }
+
+  const { data: existingGame, error: lookupError } = await supabase
+    .from("games")
+    .select("id")
+    .eq("id", gameId)
+    .maybeSingle();
+  if (lookupError) {
+    throw new Error(`Unable to verify the selected game: ${describeGameDeletionError(lookupError)}. No data was changed.`);
+  }
+  if (!existingGame) {
+    throw new Error("This game could not be found or you do not have permission to delete it.");
+  }
+
+  await assertGameHasNoProtectedRecords(gameId);
+
+  const rootPath = `games/${gameId}`;
+  const storage = supabase.storage.from("game-assets");
+  let assetPaths;
+  try {
+    assetPaths = await listGameAssetPaths(storage, rootPath, rootPath);
+  } catch (error) {
+    console.error("Unable to safely enumerate game storage before deletion.", {
+      gameId,
+      message: error?.message || "Unknown error"
+    });
+    throw error;
+  }
+
+  let removedAssetCount = 0;
+  for (let index = 0; index < assetPaths.length; index += 1000) {
+    const batch = assetPaths.slice(index, index + 1000);
+    const { error } = await storage.remove(batch);
+    if (error) {
+      const detail = describeGameDeletionError(error);
+      console.error("Game storage cleanup failed.", {
+        gameId,
+        removedAssetCount,
+        failedBatchSize: batch.length,
+        code: error.code || "GAME_ASSET_DELETE_FAILED"
+      });
+      throw new Error(
+        removedAssetCount > 0
+          ? `Storage cleanup stopped after removing ${removedAssetCount} asset(s). The game record is still present; retry deletion to clean up the remaining files. Storage error: ${detail}`
+          : `Unable to remove this game's storage assets. The game record was not deleted. Storage error: ${detail}`
+      );
+    }
+    removedAssetCount += batch.length;
   }
 
   const { data, error } = await supabase
@@ -361,17 +806,26 @@ export async function deleteGame(gameId) {
     .maybeSingle();
 
   if (error) {
-    console.error("Game deletion failed.", {
+    console.error("Game database deletion failed after storage cleanup.", {
       gameId,
+      removedAssetCount,
       code: error.code || "GAME_DELETE_FAILED"
     });
-    throw new Error("Unable to delete this game. Its game data was left unchanged.");
+    throw new Error(
+      removedAssetCount > 0
+        ? `Removed ${removedAssetCount} storage asset(s), but the game and its database content could not be deleted: ${describeGameDeletionError(error)}. The game record remains; retry after resolving this database restriction.`
+        : `Unable to delete this game: ${describeGameDeletionError(error)}. The game record and its database content remain.`
+    );
   }
   if (!data) {
-    throw new Error("This game could not be found or you do not have permission to delete it.");
+    throw new Error(
+      removedAssetCount > 0
+        ? `Removed ${removedAssetCount} storage asset(s), but the game record was not deleted. It may have been removed by another administrator. Refresh the Games list.`
+        : "This game could not be found or you do not have permission to delete it."
+    );
   }
 
-  return data;
+  return { ...data, removedAssetCount };
 }
 
 export async function updateGameRule(ruleId, ruleText) {
