@@ -13,7 +13,7 @@ create table if not exists public.games (
       'bible_action',
       'bible_draw',
       'bible_groups',
-      'bible_proverbs',s
+      'bible_proverbs',
       'bible_question',
       'bible_talk',
       'inspirational_talk_1',

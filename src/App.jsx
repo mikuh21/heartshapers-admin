@@ -936,9 +936,9 @@ function NavItem({ icon, label, active, onClick }) {
 function Dashboard({ goBooks }) {
   const [stats, setStats] = useState({
     total: 0,
+    totalGames: 0,
     locked: 0,
-    free: 0,
-    pillars: 0
+    free: 0
   });
   const [loading, setLoading] = useState(true);
 
@@ -948,17 +948,21 @@ function Dashboard({ goBooks }) {
 
   async function loadStats() {
     setLoading(true);
-    const { data, error } = await supabase
-      .from("books")
-      .select("id, pillar, is_locked");
+    const [
+      { data, error },
+      { count: gamesCount, error: gamesError }
+    ] = await Promise.all([
+      supabase.from("books").select("id, pillar, is_locked"),
+      supabase.from("games").select("id", { count: "exact", head: true })
+    ]);
 
     if (!error) {
       const rows = data || [];
       setStats({
         total: rows.length,
+        totalGames: gamesError ? 0 : gamesCount || 0,
         locked: rows.filter((b) => b.is_locked).length,
-        free: rows.filter((b) => !b.is_locked).length,
-        pillars: new Set(rows.map((b) => b.pillar).filter(Boolean)).size
+        free: rows.filter((b) => !b.is_locked).length
       });
     }
     setLoading(false);
@@ -978,9 +982,9 @@ function Dashboard({ goBooks }) {
 
       <div className="stats-grid">
         <StatCard label="Total Books" value={stats.total} icon={<BookOpen size={21} />} loading={loading} />
+        <StatCard label="Total Games" value={stats.totalGames} icon={<Gamepad2 size={21} />} loading={loading} />
         <StatCard label="Locked Books" value={stats.locked} icon={<Lock size={21} />} loading={loading} />
         <StatCard label="Free Books" value={stats.free} icon={<Unlock size={21} />} loading={loading} />
-        <StatCard label="Pillars Used" value={stats.pillars} icon={<LayoutDashboard size={21} />} loading={loading} />
       </div>
 
       <div className="info-card">

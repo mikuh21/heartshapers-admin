@@ -9,11 +9,12 @@ export async function createGame(game) {
       game_type: game.game_type,
       subtitle: game.subtitle || null,
       description: game.description || null,
+      cover_image_url: game.cover_image_url || null,
       sort_order: game.sort_order,
       price: Number(game.price) || 0,
       is_locked: true
     })
-    .select("id,title,subtitle,description,cover_image_url,game_type,is_locked,price,sort_order,created_at,updated_at")
+    .select("id,title,subtitle,description,cover_image_url,source_pdf_path,game_type,is_locked,price,sort_order,created_at,updated_at")
     .single();
 
   if (error?.code === "23505") {
@@ -26,6 +27,151 @@ export async function createGame(game) {
   return data;
 }
 
+export async function createPdfGame(gameData, coverFile, sourcePdfFile, pageFiles) {
+  const uploadedPaths = [];
+  let preserveUploadedAssets = false;
+  const coverExtension = {
+    "image/jpeg": "jpg",
+    "image/png": "png",
+    "image/webp": "webp"
+  }[coverFile?.type];
+
+  if (!coverExtension) {
+    throw new Error("Choose a JPEG, PNG, or WebP cover image.");
+  }
+  if (!Array.isArray(pageFiles) || pageFiles.length === 0) {
+    throw new Error("Select at least one PDF page for the card deck.");
+  }
+  if (
+    !sourcePdfFile
+    || (sourcePdfFile.type !== "application/pdf" && !sourcePdfFile.name?.toLowerCase().endsWith(".pdf"))
+    || sourcePdfFile.size > 50 * 1024 * 1024
+  ) {
+    throw new Error("Choose a valid game content PDF.");
+  }
+
+  const coverPath = `games/${gameData.id}/cover/cover.${coverExtension}`;
+  const sourcePdfPath = `games/${gameData.id}/source/content.pdf`;
+  try {
+    const { error: coverError } = await supabase.storage
+      .from("game-assets")
+      .upload(coverPath, coverFile, { contentType: coverFile.type, upsert: false });
+    if (coverError) throw coverError;
+    uploadedPaths.push(coverPath);
+
+    const { error: sourcePdfError } = await supabase.storage
+      .from("game-assets")
+      .upload(sourcePdfPath, sourcePdfFile, { contentType: "application/pdf", upsert: false });
+    if (sourcePdfError) throw sourcePdfError;
+    uploadedPaths.push(sourcePdfPath);
+
+    const cardRows = [];
+    for (let index = 0; index < pageFiles.length; index += 1) {
+      const { pageNumber, blob } = pageFiles[index];
+      const path = `games/${gameData.id}/cards/page-${String(index + 1).padStart(4, "0")}.png`;
+      const { error: pageError } = await supabase.storage
+        .from("game-assets")
+        .upload(path, blob, { contentType: "image/png", upsert: false });
+      if (pageError) throw pageError;
+      uploadedPaths.push(path);
+      cardRows.push({
+        sort_order: index + 1,
+        front_text: "",
+        back_text: "",
+        metadata: {
+          pairs: [],
+          content_type: "pdf_page",
+          pdf_page_number: pageNumber,
+          pdf_page_path: path,
+          page_order: index + 1
+        }
+      });
+    }
+
+    const { data: game, error: publishError } = await supabase.rpc("create_pdf_game", {
+      p_game: {
+        ...gameData,
+        cover_image_url: coverPath,
+        source_pdf_path: sourcePdfPath
+      },
+      p_cards: cardRows,
+      p_rules: gameData.rules
+    });
+    if (publishError?.code === "23505") {
+      throw new Error("A game with this ID already exists.");
+    }
+    if (publishError) {
+      if (!publishError.code) {
+        const { data: recoveredGame, error: lookupError } = await supabase
+          .from("games")
+          .select("id,title,subtitle,description,cover_image_url,source_pdf_path,game_type,is_locked,price,sort_order,created_at,updated_at")
+          .eq("id", gameData.id)
+          .maybeSingle();
+
+        if (lookupError) {
+          preserveUploadedAssets = true;
+          console.error("Unable to confirm PDF game publication after a network error.", {
+            gameId: gameData.id,
+            code: lookupError.code || "PDF_GAME_RECOVERY_FAILED"
+          });
+          throw new Error("Unable to confirm whether the PDF game was published. Check the Games list before retrying.");
+        }
+        if (recoveredGame?.cover_image_url === coverPath) {
+          const { data: recoveredCards, error: cardsLookupError } = await supabase
+            .from("game_cards")
+            .select("sort_order,metadata")
+            .eq("game_id", gameData.id)
+            .order("sort_order", { ascending: true });
+          if (cardsLookupError) {
+            preserveUploadedAssets = true;
+            console.error("Unable to verify PDF game cards after a network error.", {
+              gameId: gameData.id,
+              code: cardsLookupError.code || "PDF_CARD_RECOVERY_FAILED"
+            });
+            throw new Error("Unable to verify the published PDF game. Check the Games list before retrying.");
+          }
+
+          const expectedPaths = cardRows.map((card) => card.metadata.pdf_page_path);
+          const recoveredCardsMatch = recoveredCards?.length === expectedPaths.length
+            && recoveredCards.every((card, index) => (
+              card.sort_order === index + 1
+              && card.metadata?.pdf_page_path === expectedPaths[index]
+            ));
+          if (recoveredCardsMatch) return recoveredGame;
+          preserveUploadedAssets = true;
+          console.error("PDF game publication state is incomplete after a network error.", {
+            gameId: gameData.id
+          });
+          throw new Error("The PDF game publication could not be verified. Check the Games list before retrying.");
+        }
+      }
+      console.error("Atomic PDF game publishing failed.", {
+        code: publishError.code || "PDF_GAME_PUBLISH_FAILED"
+      });
+      throw new Error("Unable to publish the PDF game. Please try again.");
+    }
+    return game;
+  } catch (error) {
+    const cleanupErrors = [];
+    if (uploadedPaths.length > 0 && !preserveUploadedAssets) {
+      const { error: removeError } = await supabase.storage
+        .from("game-assets")
+        .remove(uploadedPaths);
+      if (removeError) cleanupErrors.push(removeError);
+    }
+    if (cleanupErrors.length > 0) {
+      console.error("PDF game creation cleanup failed.", {
+        gameId: gameData.id,
+        codes: cleanupErrors.map((cleanupError) => cleanupError.code || "CLEANUP_FAILED")
+      });
+      throw new Error("Unable to complete the PDF game, and some uploaded data could not be cleaned up. Contact an administrator.");
+    }
+    if (error instanceof Error) throw error;
+    console.error("PDF game creation failed.", { code: error?.code || "UNKNOWN" });
+    throw new Error("Unable to create the PDF game. Please try again.");
+  }
+}
+
 export async function listGamesWithCounts() {
   const [
     { data: games, error: gamesError },
@@ -34,7 +180,7 @@ export async function listGamesWithCounts() {
   ] = await Promise.all([
     supabase
       .from("games")
-      .select("id,title,subtitle,description,cover_image_url,game_type,is_locked,price,sort_order,created_at,updated_at")
+      .select("id,title,subtitle,description,cover_image_url,source_pdf_path,game_type,is_locked,price,sort_order,created_at,updated_at")
       .order("sort_order", { ascending: true }),
     supabase.from("pillars").select("id,name").order("name", { ascending: true }),
     supabase.from("game_placements").select("game_id,pillar_id")
@@ -43,6 +189,18 @@ export async function listGamesWithCounts() {
   if (gamesError) throw gamesError;
   if (pillarsError) throw pillarsError;
   if (placementsError) throw placementsError;
+
+  const coverDisplays = await Promise.all((games || []).map(async (game) => {
+    if (!game.cover_image_url?.startsWith("games/")) {
+      return [game.id, game.cover_image_url];
+    }
+    const { data, error } = await supabase.storage
+      .from("game-assets")
+      .createSignedUrl(game.cover_image_url, 3600);
+    if (error) throw error;
+    return [game.id, data.signedUrl];
+  }));
+  const coverDisplayUrls = new Map(coverDisplays);
 
   const counts = await Promise.all((games || []).map(async (game) => {
     const { count, error } = await supabase
@@ -66,6 +224,7 @@ export async function listGamesWithCounts() {
   return {
     games: (games || []).map((game) => ({
       ...game,
+      cover_display_url: coverDisplayUrls.get(game.id) || null,
       cardCount: cardCounts.get(game.id) || 0,
       placementCount: placementCounts.get(game.id) || 0,
       pillarIds: (placements || [])
@@ -141,7 +300,7 @@ export async function updateGameInformation(gameId, changes) {
       sort_order: changes.sort_order
     })
     .eq("id", gameId)
-    .select("id,title,subtitle,description,cover_image_url,game_type,is_locked,price,sort_order,created_at,updated_at")
+    .select("id,title,subtitle,description,cover_image_url,source_pdf_path,game_type,is_locked,price,sort_order,created_at,updated_at")
     .single();
 
   if (error) throw error;
@@ -171,7 +330,7 @@ export async function updateGameAccess(gameId, isLocked, changes = {}) {
       is_locked: isLocked
     })
     .eq("id", gameId)
-    .select("id,title,subtitle,description,game_type,is_locked,price,sort_order,created_at,updated_at")
+    .select("id,title,subtitle,description,cover_image_url,source_pdf_path,game_type,is_locked,price,sort_order,created_at,updated_at")
     .single();
 
   if (error) throw error;

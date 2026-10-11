@@ -283,17 +283,57 @@ td { padding: 13px 17px; border-top: 1px solid #eef0f3; font-size: 13px; }
 .games-name-cell img, .games-name-cell .cover-placeholder { width: 42px; height: 56px; flex: 0 0 auto; border-radius: 5px; object-fit: cover; }
 .games-name-cell strong, .games-name-cell span { display: block; }
 .games-name-cell span { margin-top: 3px; color: #8a93a3; font-size: 11px; }
-.games-placements-cell { text-align: center; vertical-align: middle; }
 .games-cards-cell { text-align: center; vertical-align: middle; }
-.games-access-cell { white-space: nowrap; }
-.games-access-cell .icon-btn { margin-left: 6px; vertical-align: middle; }
-.games-table { min-width: 900px; }
+.games-access-cell, .games-actions-cell { text-align: center; vertical-align: middle; white-space: nowrap; }
+.games-table { width: 100%; min-width: 680px; table-layout: fixed; }
+.games-table th:nth-child(1), .games-table td:nth-child(1) { width: 64%; }
+.games-table th:nth-child(2), .games-table td:nth-child(2) { width: 12%; }
+.games-table th:nth-child(3), .games-table td:nth-child(3) { width: 12%; }
+.games-table th:nth-child(4), .games-table td:nth-child(4) { width: 12%; }
+.games-table .actions { justify-content: center; }
 .games-table code, .games-readonly-fields code { color: #525b68; font-size: 12px; overflow-wrap: anywhere; }
 .games-actions { display: flex; justify-content: flex-start; gap: 6px; white-space: nowrap; }
 .games-actions .secondary-btn { padding: 7px 9px; }
 .games-detail-backdrop { z-index: 55; }
 .games-detail-modal { width: min(900px, 100%); }
 .games-detail-body { display: grid; gap: 20px; padding: 20px 22px; }
+.pdf-game-modal, .game-edit-modal {
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  max-height: calc(100vh - 40px);
+  max-height: min(900px, calc(100dvh - 40px));
+}
+.pdf-game-modal { width: min(680px, 100%); }
+.pdf-game-modal > .modal-header, .game-edit-modal > .modal-header,
+.pdf-game-modal > .modal-footer, .game-edit-modal > .modal-footer { flex: 0 0 auto; }
+.pdf-game-form { display: flex; flex: 1 1 auto; flex-direction: column; min-height: 0; overflow: hidden; }
+.pdf-game-modal-body { display: block; flex: 1 1 auto; min-height: 0; overflow-y: auto; overscroll-behavior: contain; }
+.game-edit-modal > .games-detail-body { flex: 1 1 auto; min-height: 0; overflow-y: auto; overscroll-behavior: contain; }
+.pdf-game-file-control { position: relative; }
+.pdf-game-file-control:focus-within .pdf-game-upload { outline: 2px solid #89929e; outline-offset: 2px; }
+.pdf-game-step-section { display: grid; gap: 9px; min-width: 0; margin-bottom: 22px; }
+.pdf-game-step-section:last-child { margin-bottom: 0; }
+.pdf-game-step-section > h4, .pdf-game-review-section > h4 { margin: 0; color: #344054; font-size: 15px; }
+.pdf-game-step-section > label:not(.pdf-game-upload) { margin-top: 3px; font-size: 13px; font-weight: 650; color: #4c5561; }
+.pdf-game-step-section input:not([type="file"]), .pdf-game-step-section textarea {
+  width: 100%; border: 1px solid #dfe3ea; border-radius: 8px; padding: 10px 11px; outline: 0;
+  background: white; color: #333; font: inherit; font-size: 13px;
+}
+.pdf-game-step-section textarea { min-height: 120px; resize: vertical; }
+.pdf-game-step-section input:focus, .pdf-game-step-section textarea:focus { border-color: #89929e; }
+.pdf-game-step-section [aria-invalid="true"] { border-color: #d92d20; }
+.pdf-game-review { display: grid; gap: 18px; }
+.pdf-game-review-heading { display: flex; align-items: center; gap: 14px; min-width: 0; }
+.pdf-game-review-heading > img { width: 86px; height: 118px; flex: 0 0 auto; object-fit: contain; border: 1px solid #e5e8ed; border-radius: 7px; background: white; }
+.pdf-game-review-heading > div { display: grid; gap: 5px; min-width: 0; color: #687385; font-size: 13px; }
+.pdf-game-review-heading h4 { margin: 0; color: #28323e; font-size: 18px; overflow-wrap: anywhere; }
+.pdf-game-review-section { display: grid; gap: 8px; min-width: 0; }
+.pdf-game-review-section > p { margin: 0; color: #4c5561; font-size: 13px; line-height: 1.5; white-space: pre-wrap; overflow-wrap: anywhere; }
+.pdf-review-page-list { display: grid; grid-template-columns: repeat(auto-fill, minmax(130px, 1fr)); gap: 10px; }
+.pdf-review-page { display: grid; gap: 6px; min-width: 0; }
+.pdf-review-page > img { display: block; width: 100%; height: 200px; object-fit: contain; border: 1px solid #e5e8ed; border-radius: 7px; background: #f4f5f7; }
+.pdf-review-page > span { color: #4c5561; font-size: 11px; text-align: center; overflow-wrap: anywhere; }
 .games-detail-section { display: grid; gap: 12px; min-width: 0; }
 .games-detail-section h4 { margin: 0; font-size: 16px; color: #344054; }
 .games-info-form { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; }
@@ -480,6 +520,47 @@ td { padding: 13px 17px; border-top: 1px solid #eef0f3; font-size: 13px; }
   font-size: 12px;
   color: #7b8492;
 }
+.pdf-game-builder {
+  display: grid;
+  gap: 10px;
+  min-width: 0;
+  margin: 8px 0;
+  padding: 12px;
+  border: 1px solid #e5e8ed;
+  border-radius: 9px;
+  background: #fbfcfd;
+}
+.pdf-game-upload-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; }
+.pdf-game-upload-field { display: grid; align-content: start; gap: 7px; min-width: 0; }
+.pdf-game-upload-field > label:first-child { color: #4c5561; font-size: 12px; font-weight: 650; }
+.pdf-game-upload {
+  display: flex; align-items: center; gap: 8px; min-width: 0; min-height: 42px; padding: 8px 10px;
+  border: 1px dashed #cfd4dc; border-radius: 8px; color: #687385; font-size: 12px; cursor: pointer;
+}
+.pdf-game-upload:hover { border-color: #89929e; background: #fff; }
+.pdf-game-upload svg { flex: 0 0 auto; }
+.pdf-game-upload span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.pdf-game-file-input {
+  position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden;
+  clip: rect(0, 0, 0, 0); white-space: nowrap; border: 0;
+}
+.pdf-game-cover-preview { width: 72px; height: 92px; object-fit: contain; justify-self: start; border: 1px solid #e5e8ed; border-radius: 6px; background: white; }
+.pdf-page-heading { display: flex; justify-content: space-between; gap: 8px; color: #4c5561; font-size: 12px; }
+.pdf-page-heading > span { color: #7b8492; white-space: nowrap; }
+.pdf-page-grid {
+  display: grid; grid-template-columns: repeat(auto-fill, minmax(125px, 1fr)); gap: 8px;
+  padding: 1px;
+}
+.pdf-page-card { min-width: 0; overflow: hidden; border: 1px solid #e5e8ed; border-radius: 7px; background: white; }
+.pdf-page-card.selected { border-color: #7b8492; box-shadow: 0 0 0 1px #7b8492; }
+.pdf-page-card > img { display: block; width: 100%; height: 112px; object-fit: contain; background: #f4f5f7; }
+.pdf-page-card-footer { display: grid; gap: 5px; padding: 6px; }
+.pdf-page-card-footer > label { display: flex; align-items: center; gap: 5px; font-size: 11px; color: #4c5561; }
+.pdf-page-card-footer input[type="checkbox"] { margin: 0; }
+.pdf-page-order { display: flex; align-items: center; gap: 3px; }
+.pdf-page-order > span { flex: 1; color: #7b8492; font-size: 10px; }
+.pdf-page-order .icon-btn { width: 25px; height: 25px; padding: 3px; }
+.pdf-page-order .icon-btn:disabled { opacity: .4; cursor: not-allowed; }
 .file-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; margin-top: 5px; }
 .file-input {
   border: 1px dashed #cfd4dc; min-height: 75px; border-radius: 8px;
@@ -728,6 +809,9 @@ td { padding: 13px 17px; border-top: 1px solid #eef0f3; font-size: 13px; }
   .games-readonly-fields { grid-template-columns: minmax(0, 1fr); }
   .games-detail-modal .modal-header, .games-detail-modal > .modal-footer { padding-left: 16px; padding-right: 16px; }
   .games-detail-modal .modal-header { align-items: flex-start; }
+  .pdf-game-modal, .game-edit-modal { max-height: calc(100vh - 24px); max-height: calc(100dvh - 24px); }
+  .pdf-game-modal > .modal-header, .game-edit-modal > .modal-header,
+  .pdf-game-modal > .modal-footer, .game-edit-modal > .modal-footer { padding-left: 16px; padding-right: 16px; }
   .user-access-toolbar { grid-template-columns: minmax(0, 1fr) 128px; gap: 8px; }
   .settings-tabs { overflow-x: auto; overflow-y: hidden; }
   .settings-grid { grid-template-columns: minmax(0, 1fr); }
@@ -741,6 +825,10 @@ td { padding: 13px 17px; border-top: 1px solid #eef0f3; font-size: 13px; }
   .toolbar { flex-direction: column; }
   .search-box { width: 100%; }
   .file-grid { grid-template-columns: 1fr; }
+  .pdf-game-upload-grid { grid-template-columns: minmax(0, 1fr); }
+  .pdf-page-grid { grid-template-columns: repeat(auto-fill, minmax(105px, 1fr)); }
+  .pdf-review-page-list { grid-template-columns: repeat(auto-fill, minmax(105px, 1fr)); }
+  .pdf-review-page > img { height: 170px; }
   .setting-row { align-items: flex-start; flex-direction: column; }
   .detail-row { grid-template-columns: 1fr; }
 }

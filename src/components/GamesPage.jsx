@@ -1,22 +1,26 @@
 import React, { useEffect, useMemo, useRef, useState } from "react";
+import pdfWorkerUrl from "pdfjs-dist/build/pdf.worker.min.mjs?url";
 import {
   ChevronDown,
   ChevronLeft,
   ChevronRight,
+  FileText,
   Gamepad2,
+  ImagePlus,
   Loader2,
   Pencil,
   Plus,
   Search,
   Trash2,
   Users,
-  X
+  X,
+  ChevronUp
 } from "lucide-react";
 import { logAdminAction } from "../lib/adminAudit";
 import { getGameUserAccess, updateGameUserAccess } from "../lib/adminUsers";
 import {
-  createGame,
   createGameCard,
+  createPdfGame,
   createGameRule,
   deleteGame,
   loadGameAccess,
@@ -29,19 +33,33 @@ import {
 } from "../lib/games";
 
 const CARD_PAGE_SIZE = 20;
-const GAME_TYPES = [
-  { label: "Bible Action", value: "bible_action" },
-  { label: "Bible Draw", value: "bible_draw" },
-  { label: "Bible Groups", value: "bible_groups" },
-  { label: "Bible Proverbs", value: "bible_proverbs" },
-  { label: "Bible Question", value: "bible_question" },
-  { label: "Bible Talk", value: "bible_talk" },
-  { label: "Inspirational Talk 1", value: "inspirational_talk_1" },
-  { label: "Inspirational Talk 2", value: "inspirational_talk_2" }
-];
+const MAX_GAME_COVER_SIZE = 10 * 1024 * 1024;
+const MAX_GAME_PDF_SIZE = 50 * 1024 * 1024;
 
 function formatMetadata(metadata) {
   return JSON.stringify(metadata ?? {}, null, 2);
+}
+
+async function renderPdfPage(page, maxDimension, outputType = "image/jpeg") {
+  const initialViewport = page.getViewport({ scale: 1 });
+  const scale = Math.min(maxDimension / initialViewport.width, maxDimension / initialViewport.height);
+  const viewport = page.getViewport({ scale });
+  const canvas = document.createElement("canvas");
+  canvas.width = Math.ceil(viewport.width);
+  canvas.height = Math.ceil(viewport.height);
+  const context = canvas.getContext("2d");
+  if (!context) throw new Error("Unable to prepare a PDF page preview.");
+
+  await page.render({ canvasContext: context, viewport }).promise;
+  const blob = await new Promise((resolve, reject) => {
+    canvas.toBlob((result) => {
+      if (result) resolve(result);
+      else reject(new Error("Unable to render a PDF page image."));
+    }, outputType, outputType === "image/jpeg" ? 0.9 : undefined);
+  });
+  canvas.width = 0;
+  canvas.height = 0;
+  return blob;
 }
 
 function makePairs(pairs, count) {
@@ -433,21 +451,19 @@ export default function GamesPage({ canManageGames, ConfirmModal, showToast }) {
           </div>
         ) : (
           <div className="table-wrap">
-            <table>
-              <thead><tr><th>Game</th><th>Game Type</th><th className="games-cards-cell">Cards</th><th>Access</th><th className="games-placements-cell">Placements</th><th></th></tr></thead>
+            <table className="games-table">
+              <thead><tr><th>Game</th><th className="games-cards-cell">Cards</th><th className="games-access-cell">Access</th><th className="games-actions-cell">Actions</th></tr></thead>
               <tbody>
                 {filteredGames.map((game) => (
                   <tr key={game.id}>
-                    <td><div className="games-name-cell">{game.cover_image_url ? <img src={game.cover_image_url} alt="" /> : <div className="cover-placeholder"><Gamepad2 size={20} /></div>}<div><strong>{game.title}</strong><span>{game.subtitle || game.id}</span></div></div></td>
-                    <td><code>{game.game_type}</code></td>
+                    <td><div className="games-name-cell">{game.cover_display_url || game.cover_image_url ? <img src={game.cover_display_url || game.cover_image_url} alt="" /> : <div className="cover-placeholder"><Gamepad2 size={20} /></div>}<div><strong>{game.title}</strong><span>{game.subtitle || game.id}</span></div></div></td>
                     <td className="games-cards-cell">{game.cardCount}</td>
                     <td className="games-access-cell">
                       <button type="button" className="icon-btn" title="User Access" aria-label={`Manage user access for ${game.title}`} onClick={() => setAccessGame(game)}>
                         <Users size={17} />
                       </button>
                     </td>
-                    <td className="games-placements-cell">{game.placementCount}</td>
-                    <td>
+                    <td className="games-actions-cell">
                       <div className="actions">
                         <button type="button" className="icon-btn" title="View / Edit" aria-label={`View or edit ${game.title}`} onClick={() => setSelectedGame(game)}>
                           <Pencil size={17} />
@@ -493,7 +509,7 @@ export default function GamesPage({ canManageGames, ConfirmModal, showToast }) {
               targetId: game.id,
               targetName: game.title,
               details: {
-                "Game Type": GAME_TYPES.find((type) => type.value === game.game_type)?.label || game.game_type,
+                "Game Type": "PDF Deck",
                 ...(game.subtitle ? { Subtitle: game.subtitle } : {}),
                 ...(game.description ? { Description: game.description } : {}),
                 "Sort Order": game.sort_order,
@@ -690,19 +706,167 @@ function GameUserAccessModal({ game, onClose, showToast }) {
 
 function AddGameModal({ existingGames, nextSortOrder, onClose, onCreated, showToast }) {
   const [form, setForm] = useState({
-    id: "",
     title: "",
-    game_type: "",
     subtitle: "",
-    description: "",
-    price: "0",
-    sort_order: String(nextSortOrder)
+    rules: ""
   });
+  const [step, setStep] = useState(1);
+  const [gameId, setGameId] = useState("");
   const [errors, setErrors] = useState({});
   const [saving, setSaving] = useState(false);
+  const [coverFile, setCoverFile] = useState(null);
+  const [coverPreviewUrl, setCoverPreviewUrl] = useState("");
+  const [pdfFile, setPdfFile] = useState(null);
+  const [pdfDocument, setPdfDocument] = useState(null);
+  const [pdfPages, setPdfPages] = useState([]);
+  const [selectedPageNumbers, setSelectedPageNumbers] = useState([]);
+  const [pdfLoading, setPdfLoading] = useState(false);
+  const [pdfProgress, setPdfProgress] = useState({ current: 0, total: 0 });
+  const pdfDocumentRef = useRef(null);
+  const pdfjsLibRef = useRef(null);
+  const pdfLoadIdRef = useRef(0);
+  const previewUrlsRef = useRef([]);
+  const coverPreviewUrlRef = useRef("");
+
+  useEffect(() => () => {
+    pdfLoadIdRef.current += 1;
+    previewUrlsRef.current.forEach((url) => URL.revokeObjectURL(url));
+    if (coverPreviewUrlRef.current) URL.revokeObjectURL(coverPreviewUrlRef.current);
+    if (pdfDocumentRef.current) {
+      pdfDocumentRef.current.destroy().catch((error) => {
+        console.error("PDF preview cleanup failed.", { message: error?.message });
+      });
+    }
+  }, []);
+
+  function clearPdfPreview() {
+    pdfLoadIdRef.current += 1;
+    setPdfLoading(false);
+    setPdfFile(null);
+    previewUrlsRef.current.forEach((url) => URL.revokeObjectURL(url));
+    previewUrlsRef.current = [];
+    if (pdfDocumentRef.current) {
+      pdfDocumentRef.current.destroy().catch((error) => {
+        console.error("PDF preview cleanup failed.", { message: error?.message });
+      });
+    }
+    pdfDocumentRef.current = null;
+    setPdfDocument(null);
+    setPdfPages([]);
+    setSelectedPageNumbers([]);
+    setPdfProgress({ current: 0, total: 0 });
+  }
+
+  function chooseCover(event) {
+    const file = event.target.files?.[0] || null;
+    event.target.value = "";
+    if (file && !["image/jpeg", "image/png", "image/webp"].includes(file.type)) {
+      if (coverPreviewUrlRef.current) URL.revokeObjectURL(coverPreviewUrlRef.current);
+      coverPreviewUrlRef.current = "";
+      setCoverPreviewUrl("");
+      setCoverFile(null);
+      setErrors((current) => ({ ...current, cover: "Choose a JPEG, PNG, or WebP cover image." }));
+      return;
+    }
+    if (file && file.size > MAX_GAME_COVER_SIZE) {
+      if (coverPreviewUrlRef.current) URL.revokeObjectURL(coverPreviewUrlRef.current);
+      coverPreviewUrlRef.current = "";
+      setCoverPreviewUrl("");
+      setCoverFile(null);
+      setErrors((current) => ({ ...current, cover: "Cover images must be 10 MB or smaller." }));
+      return;
+    }
+    if (coverPreviewUrlRef.current) URL.revokeObjectURL(coverPreviewUrlRef.current);
+    coverPreviewUrlRef.current = file ? URL.createObjectURL(file) : "";
+    setCoverPreviewUrl(coverPreviewUrlRef.current);
+    setCoverFile(file);
+    setErrors((current) => ({ ...current, cover: "" }));
+  }
+
+  async function choosePdf(event) {
+    const file = event.target.files?.[0] || null;
+    event.target.value = "";
+    clearPdfPreview();
+    setPdfFile(null);
+    setErrors((current) => ({ ...current, pdf: "", pages: "" }));
+    if (!file) return;
+    if (!file.type.includes("pdf") && !file.name.toLowerCase().endsWith(".pdf")) {
+      setErrors((current) => ({ ...current, pdf: "Choose a PDF file." }));
+      return;
+    }
+    if (file.size > MAX_GAME_PDF_SIZE) {
+      setErrors((current) => ({ ...current, pdf: "PDF files must be 50 MB or smaller." }));
+      return;
+    }
+
+    const loadId = pdfLoadIdRef.current;
+    setPdfLoading(true);
+    try {
+      setPdfFile(file);
+      if (!pdfjsLibRef.current) {
+        pdfjsLibRef.current = await import("pdfjs-dist");
+        pdfjsLibRef.current.GlobalWorkerOptions.workerSrc = pdfWorkerUrl;
+      }
+      const task = pdfjsLibRef.current.getDocument({ data: new Uint8Array(await file.arrayBuffer()) });
+      const document = await task.promise;
+      if (!Number.isInteger(document.numPages) || document.numPages < 1) {
+        await document.destroy();
+        throw new Error("This PDF does not contain any renderable pages.");
+      }
+      if (loadId !== pdfLoadIdRef.current) {
+        await document.destroy();
+        return;
+      }
+      pdfDocumentRef.current = document;
+      setPdfDocument(document);
+      setPdfProgress({ current: 0, total: document.numPages });
+      const pages = [];
+      for (let pageNumber = 1; pageNumber <= document.numPages; pageNumber += 1) {
+        if (loadId !== pdfLoadIdRef.current) {
+          await document.destroy();
+          return;
+        }
+        const page = await document.getPage(pageNumber);
+        const previewBlob = await renderPdfPage(page, 240);
+        const previewUrl = URL.createObjectURL(previewBlob);
+        previewUrlsRef.current.push(previewUrl);
+        pages.push({ pageNumber, previewUrl });
+        setPdfPages([...pages]);
+        setPdfProgress({ current: pageNumber, total: document.numPages });
+      }
+      setSelectedPageNumbers(Array.from({ length: document.numPages }, (_, index) => index + 1));
+    } catch (error) {
+      if (loadId === pdfLoadIdRef.current) {
+        console.error("PDF page preview failed.", { message: error?.message });
+        setErrors((current) => ({ ...current, pdf: "Unable to read this PDF. Choose another file." }));
+        clearPdfPreview();
+      }
+    } finally {
+      if (loadId === pdfLoadIdRef.current) setPdfLoading(false);
+    }
+  }
+
+  function togglePdfPage(pageNumber, checked) {
+    setSelectedPageNumbers((current) => checked
+      ? [...current, pageNumber]
+      : current.filter((selected) => selected !== pageNumber));
+    setErrors((current) => ({ ...current, pages: "" }));
+  }
+
+  function movePdfPage(pageNumber, direction) {
+    setSelectedPageNumbers((current) => {
+      const index = current.indexOf(pageNumber);
+      const destination = index + direction;
+      if (index < 0 || destination < 0 || destination >= current.length) return current;
+      const next = [...current];
+      [next[index], next[destination]] = [next[destination], next[index]];
+      return next;
+    });
+  }
 
   function update(field, value) {
     setForm((current) => ({ ...current, [field]: value }));
+    if (field === "title") setGameId("");
     setErrors((current) => {
       if (!current[field]) return current;
       const next = { ...current };
@@ -711,51 +875,57 @@ function AddGameModal({ existingGames, nextSortOrder, onClose, onCreated, showTo
     });
   }
 
+  function buildGameId(title) {
+    const slug = title.toLowerCase().normalize("NFKD")
+      .replace(/[\u0300-\u036f]/g, "")
+      .replace(/[^a-z0-9]+/g, "-")
+      .replace(/^-+|-+$/g, "")
+      .slice(0, 48);
+    return `game-${slug || "custom"}-${crypto.randomUUID()}`;
+  }
+
+  function validateDetails() {
+    const nextErrors = {};
+    const title = form.title.trim();
+    if (!title) nextErrors.title = "Game title is required.";
+    else if (existingGames.some((game) => game.title?.trim().toLocaleLowerCase() === title.toLocaleLowerCase())) {
+      nextErrors.title = "A game with this title already exists.";
+    }
+    if (!form.rules.trim()) nextErrors.rules = "Game rules are required.";
+    if (!coverFile) nextErrors.cover = "Upload a separate game cover image.";
+    if (!pdfFile || !pdfDocument) nextErrors.pdf = "Upload a valid game content PDF.";
+    if (selectedPageNumbers.length === 0) nextErrors.pages = "Select at least one PDF page for the card deck.";
+    setErrors(nextErrors);
+    return Object.keys(nextErrors).length === 0;
+  }
+
   async function submit(event) {
     event.preventDefault();
-    const nextErrors = {};
-    const id = form.id.trim();
-    const title = form.title.trim();
-    const sortOrderText = form.sort_order.trim();
-    const sortOrder = sortOrderText === "" ? nextSortOrder : Number(sortOrderText);
-    const priceText = form.price.trim();
-    const price = priceText === "" ? 0 : Number(priceText);
-
-    if (!id) nextErrors.id = "Game ID is required.";
-    else if (!/^[a-z0-9_-]+$/.test(id)) {
-      nextErrors.id = "Use lowercase letters, numbers, hyphens, or underscores only.";
-    } else if (existingGames.some((game) => game.id === id)) {
-      nextErrors.id = "A game with this ID already exists.";
-    }
-    if (!title) nextErrors.title = "Game title is required.";
-    if (!GAME_TYPES.some((type) => type.value === form.game_type)) {
-      nextErrors.game_type = "Select a supported game type.";
-    }
-    if (sortOrderText !== "" && (!Number.isFinite(sortOrder) || !Number.isInteger(sortOrder))) {
-      nextErrors.sort_order = "Sort order must be a whole number.";
-    }
-    if (!Number.isFinite(price) || price < 0) {
-      nextErrors.price = "Price must be zero or greater.";
-    }
-
-    setErrors(nextErrors);
-    if (Object.keys(nextErrors).length > 0) return;
-
+    if (!validateDetails()) return;
     setSaving(true);
     try {
-      const game = await createGame({
-        id,
-        title,
-        game_type: form.game_type,
+      const pageFiles = [];
+      for (const pageNumber of selectedPageNumbers) {
+        const page = await pdfDocument.getPage(pageNumber);
+        pageFiles.push({
+          pageNumber,
+          blob: await renderPdfPage(page, 3000, "image/png")
+        });
+      }
+      const game = await createPdfGame({
+        id: gameId,
+        title: form.title.trim(),
+        game_type: "pdf_deck",
         subtitle: form.subtitle.trim(),
-        description: form.description.trim(),
-        price,
-        sort_order: sortOrder
-      });
+        description: null,
+        price: 0,
+        sort_order: nextSortOrder,
+        rules: form.rules.trim()
+      }, coverFile, pdfFile, pageFiles);
       await onCreated(game);
     } catch (createError) {
       if (createError.message === "A game with this ID already exists.") {
-        setErrors((current) => ({ ...current, id: createError.message }));
+        setGameId(buildGameId(form.title.trim()));
       } else {
         showToast(createError.message || "Unable to create the game.", "error");
       }
@@ -764,50 +934,151 @@ function AddGameModal({ existingGames, nextSortOrder, onClose, onCreated, showTo
     }
   }
 
+  const orderedPreviewPages = [
+    ...selectedPageNumbers
+      .map((pageNumber) => pdfPages.find((page) => page.pageNumber === pageNumber))
+      .filter(Boolean),
+    ...pdfPages.filter((page) => !selectedPageNumbers.includes(page.pageNumber))
+  ];
+
   return (
     <div className="modal-backdrop games-detail-backdrop">
-      <div className="modal user-modal" role="dialog" aria-modal="true" aria-labelledby="add-game-title">
+      <div className="modal user-modal pdf-game-modal" role="dialog" aria-modal="true" aria-labelledby="add-game-title">
         <div className="modal-header">
-          <div><h3 id="add-game-title">Add Game</h3><p className="muted">New games are created inactive.</p></div>
+          <div>
+            <h3 id="add-game-title">{step === 1 ? "Add Game" : "Review Game"}</h3>
+            <p className="muted">{step === 1 ? "Add information and upload the game content." : "Review the cover, rules, and card pages before creating."}</p>
+          </div>
           <button type="button" className="icon-btn" onClick={onClose} disabled={saving} aria-label="Close Add Game"><X size={20} /></button>
         </div>
-        <form onSubmit={submit} noValidate>
-          <div className="modal-body">
-            <label htmlFor="new-game-id">Game ID</label>
-            <input id="new-game-id" value={form.id} onChange={(event) => update("id", event.target.value)} aria-invalid={Boolean(errors.id)} aria-describedby={errors.id ? "new-game-id-error" : undefined} required />
-            {errors.id && <span className="field-error" id="new-game-id-error">{errors.id}</span>}
-            <span className="field-hint">Use a stable lowercase ID, for example game-bible-charades.</span>
+        <form className="pdf-game-form" onSubmit={submit} noValidate>
+          <div className="modal-body pdf-game-modal-body">
+            {step === 1 ? (
+              <>
+                <section className="pdf-game-step-section">
+                  <h4>Step 1 — Game Information</h4>
+                  <label htmlFor="new-game-title">Game Title</label>
+                  <input id="new-game-title" value={form.title} onChange={(event) => update("title", event.target.value)} aria-invalid={Boolean(errors.title)} aria-describedby={errors.title ? "new-game-title-error" : undefined} required />
+                  {errors.title && <span className="field-error" id="new-game-title-error">{errors.title}</span>}
+                  <label htmlFor="new-game-subtitle">Subtitle <span className="muted">(optional)</span></label>
+                  <input id="new-game-subtitle" value={form.subtitle} onChange={(event) => update("subtitle", event.target.value)} />
+                  <label htmlFor="new-game-rules">Rules</label>
+                  <textarea id="new-game-rules" rows={5} value={form.rules} onChange={(event) => update("rules", event.target.value)} aria-invalid={Boolean(errors.rules)} aria-describedby={errors.rules ? "new-game-rules-error" : undefined} required />
+                  {errors.rules && <span className="field-error" id="new-game-rules-error">{errors.rules}</span>}
+                </section>
 
-            <label htmlFor="new-game-title">Title</label>
-            <input id="new-game-title" value={form.title} onChange={(event) => update("title", event.target.value)} aria-invalid={Boolean(errors.title)} aria-describedby={errors.title ? "new-game-title-error" : undefined} required />
-            {errors.title && <span className="field-error" id="new-game-title-error">{errors.title}</span>}
+                <section className="pdf-game-step-section">
+                  <h4>Step 2 — Upload Game Cover</h4>
+                  <div className="pdf-game-file-control">
+                    <label className="pdf-game-upload" htmlFor="new-game-cover">
+                      <ImagePlus size={18} />
+                      <span>{coverFile ? `Replace Cover · ${coverFile.name}` : "Choose Game Cover Image"}</span>
+                    </label>
+                    <input id="new-game-cover" className="pdf-game-file-input" type="file" accept="image/jpeg,image/png,image/webp" onChange={chooseCover} disabled={saving} aria-invalid={Boolean(errors.cover)} aria-describedby={errors.cover ? "new-game-cover-error" : undefined} />
+                  </div>
+                  <span className="field-hint">JPEG, PNG, or WebP; maximum 10 MB. The image is kept at its original aspect ratio.</span>
+                  {coverPreviewUrl && <img className="pdf-game-cover-preview" src={coverPreviewUrl} alt="Selected game cover preview" />}
+                  {coverFile && <span className="field-hint">{coverFile.name}</span>}
+                  {errors.cover && <span className="field-error" id="new-game-cover-error">{errors.cover}</span>}
+                </section>
 
-            <label htmlFor="new-game-type">Game Type</label>
-            <select id="new-game-type" value={form.game_type} onChange={(event) => update("game_type", event.target.value)} aria-invalid={Boolean(errors.game_type)} aria-describedby={errors.game_type ? "new-game-type-error" : undefined} required>
-              <option value="">Select a game type</option>
-              {GAME_TYPES.map((type) => <option key={type.value} value={type.value}>{type.label} — {type.value}</option>)}
-            </select>
-            {errors.game_type && <span className="field-error" id="new-game-type-error">{errors.game_type}</span>}
-
-            <label htmlFor="new-game-subtitle">Subtitle <span className="muted">(optional)</span></label>
-            <input id="new-game-subtitle" value={form.subtitle} onChange={(event) => update("subtitle", event.target.value)} />
-
-            <label htmlFor="new-game-description">Description <span className="muted">(optional)</span></label>
-            <textarea id="new-game-description" rows={3} value={form.description} onChange={(event) => update("description", event.target.value)} />
-
-            <label htmlFor="new-game-price">Price (₱)</label>
-            <input id="new-game-price" type="number" min="0" step="0.01" value={form.price} onChange={(event) => update("price", event.target.value)} aria-invalid={Boolean(errors.price)} />
-            {errors.price && <span className="field-error">{errors.price}</span>}
-
-            <label htmlFor="new-game-sort-order">Sort Order <span className="muted">(optional)</span></label>
-            <input id="new-game-sort-order" type="number" step="1" value={form.sort_order} onChange={(event) => update("sort_order", event.target.value)} aria-invalid={Boolean(errors.sort_order)} aria-describedby={errors.sort_order ? "new-game-sort-order-error" : undefined} />
-            {errors.sort_order && <span className="field-error" id="new-game-sort-order-error">{errors.sort_order}</span>}
+                <section className="pdf-game-step-section">
+                  <h4>Step 3 — Upload Game Content PDF</h4>
+                  <div className="pdf-game-file-control">
+                    <label className="pdf-game-upload" htmlFor="new-game-pdf">
+                      <FileText size={18} />
+                      <span>{pdfFile ? `Replace PDF · ${pdfFile.name}` : "Choose Game Content PDF"}</span>
+                    </label>
+                    <input id="new-game-pdf" className="pdf-game-file-input" type="file" accept="application/pdf,.pdf" onChange={choosePdf} disabled={saving} aria-invalid={Boolean(errors.pdf)} aria-describedby={errors.pdf ? "new-game-pdf-error" : undefined} />
+                  </div>
+                  <span className="field-hint">PDF; maximum 50 MB. Each selected page becomes one complete card face.</span>
+                  {pdfFile && <span className="field-hint">{pdfFile.name} · {pdfPages.length} {pdfPages.length === 1 ? "page" : "pages"}</span>}
+                  {pdfLoading && <span className="field-hint">Rendering page {pdfProgress.current} of {pdfProgress.total}...</span>}
+                  {errors.pdf && <span className="field-error" id="new-game-pdf-error">{errors.pdf}</span>}
+                  {pdfPages.length > 0 && (
+                    <>
+                      <div className="pdf-page-heading">
+                        <strong>Select card pages</strong>
+                        <span>{selectedPageNumbers.length} selected</span>
+                      </div>
+                      <span className="field-hint">All pages are selected in their original PDF order. Deselect any page not needed.</span>
+                      <div className="pdf-page-grid">
+                        {orderedPreviewPages.map((page) => {
+                          const selectedIndex = selectedPageNumbers.indexOf(page.pageNumber);
+                          const selected = selectedIndex !== -1;
+                          return (
+                            <div className={`pdf-page-card${selected ? " selected" : ""}`} key={page.pageNumber}>
+                              <img src={page.previewUrl} alt={`PDF page ${page.pageNumber} preview`} />
+                              <div className="pdf-page-card-footer">
+                                <label>
+                                  <input type="checkbox" checked={selected} onChange={(event) => togglePdfPage(page.pageNumber, event.target.checked)} disabled={saving} />
+                                  PDF page {page.pageNumber}
+                                </label>
+                                {selected && (
+                                  <div className="pdf-page-order">
+                                    <span>Card {selectedIndex + 1}</span>
+                                    <button type="button" className="icon-btn" onClick={() => movePdfPage(page.pageNumber, -1)} disabled={saving || selectedIndex === 0} aria-label={`Move page ${page.pageNumber} earlier`}><ChevronUp size={16} /></button>
+                                    <button type="button" className="icon-btn" onClick={() => movePdfPage(page.pageNumber, 1)} disabled={saving || selectedIndex === selectedPageNumbers.length - 1} aria-label={`Move page ${page.pageNumber} later`}><ChevronDown size={16} /></button>
+                                  </div>
+                                )}
+                              </div>
+                            </div>
+                          );
+                        })}
+                      </div>
+                    </>
+                  )}
+                  {errors.pages && <span className="field-error">{errors.pages}</span>}
+                </section>
+              </>
+            ) : (
+              <section className="pdf-game-review" aria-label="Review new game">
+                <div className="pdf-game-review-heading">
+                  {coverPreviewUrl && <img src={coverPreviewUrl} alt={`${form.title.trim()} cover`} />}
+                  <div>
+                    <h4>{form.title.trim()}</h4>
+                    <span>{form.subtitle.trim() || "No subtitle"}</span>
+                    <span>{selectedPageNumbers.length} {selectedPageNumbers.length === 1 ? "card" : "cards"}</span>
+                  </div>
+                </div>
+                <div className="pdf-game-review-section">
+                  <h4>Rules</h4>
+                  <p>{form.rules.trim()}</p>
+                </div>
+                <div className="pdf-game-review-section">
+                  <h4>Selected PDF Pages</h4>
+                  <span className="field-hint">Source PDF: {pdfFile?.name}</span>
+                  <div className="pdf-review-page-list">
+                    {selectedPageNumbers.map((pageNumber, index) => {
+                      const page = pdfPages.find((item) => item.pageNumber === pageNumber);
+                      return page ? (
+                        <div className="pdf-review-page" key={pageNumber}>
+                          <img src={page.previewUrl} alt={`Card ${index + 1}, original PDF page ${pageNumber}`} />
+                          <span>Card {index + 1} · PDF page {pageNumber}</span>
+                        </div>
+                      ) : null;
+                    })}
+                  </div>
+                </div>
+              </section>
+            )}
           </div>
           <div className="modal-footer">
+            {step === 2 && <button type="button" className="secondary-btn" onClick={() => setStep(1)} disabled={saving}>Back</button>}
             <button type="button" className="secondary-btn" onClick={onClose} disabled={saving}>Cancel</button>
-            <button type="submit" className="primary-btn" disabled={saving}>
-              {saving ? <><Loader2 size={17} className="spin" /> Creating...</> : "Create Game"}
-            </button>
+            {step === 1 ? (
+              <button type="button" className="primary-btn" onClick={() => {
+                if (!validateDetails() || pdfLoading) return;
+                setGameId(buildGameId(form.title.trim()));
+                setStep(2);
+              }} disabled={saving || pdfLoading}>
+                {pdfLoading ? "Rendering PDF..." : "Review Game"}
+              </button>
+            ) : (
+              <button type="submit" className="primary-btn" disabled={saving || pdfLoading}>
+                {saving ? <><Loader2 size={17} className="spin" /> Creating...</> : "Create Game"}
+              </button>
+            )}
           </div>
         </form>
       </div>
@@ -1176,7 +1447,7 @@ function GameDetailsModal({ game, onClose, onSaved, showToast }) {
 
   return (
     <div className="modal-backdrop games-detail-backdrop">
-      <div className="modal games-detail-modal" role="dialog" aria-modal="true" aria-labelledby="game-detail-title">
+      <div className="modal games-detail-modal game-edit-modal" role="dialog" aria-modal="true" aria-labelledby="game-detail-title">
         <div className="modal-header">
           <div><h3 id="game-detail-title">{game.title}</h3><p className="muted">Game details and content</p></div>
           <button type="button" className="icon-btn" onClick={onClose} aria-label="Close game details"><X size={20} /></button>
@@ -1187,7 +1458,7 @@ function GameDetailsModal({ game, onClose, onSaved, showToast }) {
 
           <section className="games-detail-section">
             <h4>Game Information</h4>
-            <form className="games-info-form" onSubmit={saveInformation}>
+            <form id="game-information-form" className="games-info-form" onSubmit={saveInformation}>
               <label>Title<input value={form.title} onChange={(event) => setForm((current) => ({ ...current, title: event.target.value }))} required /></label>
               <label>Subtitle<input value={form.subtitle} onChange={(event) => setForm((current) => ({ ...current, subtitle: event.target.value }))} /></label>
               <label>Description<textarea rows={3} value={form.description} onChange={(event) => setForm((current) => ({ ...current, description: event.target.value }))} /></label>
@@ -1221,10 +1492,9 @@ function GameDetailsModal({ game, onClose, onSaved, showToast }) {
               </div>
               <div className="games-cover-detail">
                 <span className="muted">Cover Image</span>
-                {game.cover_image_url ? <img src={game.cover_image_url} alt={`${game.title} cover`} /> : <div className="cover-placeholder"><Gamepad2 size={22} /></div>}
+                {game.cover_display_url || game.cover_image_url ? <img src={game.cover_display_url || game.cover_image_url} alt={`${game.title} cover`} /> : <div className="cover-placeholder"><Gamepad2 size={22} /></div>}
                 <span className="field-hint">{game.cover_image_url || "No cover image is configured."}</span>
               </div>
-              <div className="games-section-actions"><button type="submit" className="primary-btn" disabled={savingInfo || loading || !accessLoaded}>{savingInfo ? "Saving..." : "Save Information"}</button></div>
             </form>
           </section>
 
@@ -1278,7 +1548,12 @@ function GameDetailsModal({ game, onClose, onSaved, showToast }) {
             ))}
           </section>
         </div>
-        <div className="modal-footer"><button type="button" className="secondary-btn" onClick={onClose}>Close</button></div>
+        <div className="modal-footer">
+          <button type="button" className="secondary-btn" onClick={onClose} disabled={savingInfo}>Cancel</button>
+          <button type="submit" form="game-information-form" className="primary-btn" disabled={savingInfo || loading || !accessLoaded}>
+            {savingInfo ? "Saving..." : "Save Information"}
+          </button>
+        </div>
       </div>
       {addRuleOpen && (
         <AddGameRuleModal
