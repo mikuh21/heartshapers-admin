@@ -45,6 +45,6 @@ create policy game_assets_entitlement_read
     )
   );
 
-alter table public.games drop column is_active;
+alter table public.games drop column if exists is_active;
 
 commit;
