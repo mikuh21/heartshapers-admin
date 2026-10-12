@@ -30,6 +30,7 @@ import {
   RotateCcw
 } from "lucide-react";
 import { supabase, COVER_BUCKET, PDF_BUCKET } from "./lib/supabase";
+import heartshapersLogo from "./assets/heartshapers-logo.svg?no-inline";
 import {
   DEFAULT_UPLOAD_SETTINGS,
   MAX_UPLOAD_SIZE_MB,
@@ -671,7 +672,7 @@ function Login() {
   return (
     <div className="login-page">
       <div className="login-card">
-        <img className="login-logo" src="/FINAL HEARTSHAPERS ICON.svg" alt="HeartShapers logo" />
+        <img className="login-logo" src={heartshapersLogo} alt="HeartShapers logo" />
         <h1>Heartshapers</h1>
         <p className="muted">Admin Management</p>
 
@@ -770,7 +771,7 @@ function AdminApp({ session }) {
         <div className="sidebar-brand">
           <img
             className="sidebar-brand-logo"
-            src="/FINAL%20HEARTSHAPERS%20ICON.svg"
+            src={heartshapersLogo}
             alt="Heartshapers"
           />
           <div>
