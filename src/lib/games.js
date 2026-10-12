@@ -1,4 +1,9 @@
 import { supabase } from "./supabase";
+import {
+  describeGameStorageUploadError,
+  gameUploadSizeError,
+  loadGameUploadLimit
+} from "./uploadSettings";
 
 export async function createGame(game) {
   const { data, error } = await supabase
@@ -52,9 +57,12 @@ export async function createPdfGame(gameData, coverFile, sourcePdfFile, pageFile
   if (
     !sourcePdfFile
     || (sourcePdfFile.type !== "application/pdf" && !sourcePdfFile.name?.toLowerCase().endsWith(".pdf"))
-    || sourcePdfFile.size > 50 * 1024 * 1024
   ) {
     throw new Error("Choose a valid game content PDF.");
+  }
+  const uploadLimit = await loadGameUploadLimit();
+  if (coverFile.size > uploadLimit.maximumBytes || sourcePdfFile.size > uploadLimit.maximumBytes) {
+    throw new Error(gameUploadSizeError(uploadLimit));
   }
 
   const coverPath = `games/${gameData.id}/cover/cover.${coverExtension}`;
@@ -63,13 +71,13 @@ export async function createPdfGame(gameData, coverFile, sourcePdfFile, pageFile
     const { error: coverError } = await supabase.storage
       .from("game-assets")
       .upload(coverPath, coverFile, { contentType: coverFile.type, upsert: false });
-    if (coverError) throw coverError;
+    if (coverError) throw describeGameStorageUploadError(coverError, uploadLimit);
     uploadedPaths.push(coverPath);
 
     const { error: sourcePdfError } = await supabase.storage
       .from("game-assets")
       .upload(sourcePdfPath, sourcePdfFile, { contentType: "application/pdf", upsert: false });
-    if (sourcePdfError) throw sourcePdfError;
+    if (sourcePdfError) throw describeGameStorageUploadError(sourcePdfError, uploadLimit);
     uploadedPaths.push(sourcePdfPath);
 
     const cardRows = [];
@@ -79,7 +87,7 @@ export async function createPdfGame(gameData, coverFile, sourcePdfFile, pageFile
       const { error: pageError } = await supabase.storage
         .from("game-assets")
         .upload(path, blob, { contentType: "image/png", upsert: false });
-      if (pageError) throw pageError;
+      if (pageError) throw describeGameStorageUploadError(pageError, uploadLimit);
       uploadedPaths.push(path);
       cardRows.push({
         sort_order: index + 1,
@@ -238,14 +246,18 @@ export async function updatePdfGame(gameData, { coverFile = null, sourcePdfFile 
   }[coverFile.type]) {
     throw new Error("Choose a JPEG, PNG, or WebP cover image.");
   }
-  if (coverFile?.size > 10 * 1024 * 1024) {
-    throw new Error("Cover images must be 10 MB or smaller.");
+  let uploadLimit = null;
+  if (sourcePdfFile && (sourcePdfFile.type !== "application/pdf" && !sourcePdfFile.name?.toLowerCase().endsWith(".pdf"))) {
+    throw new Error("Choose a valid game content PDF.");
   }
-  if (sourcePdfFile && (
-    (sourcePdfFile.type !== "application/pdf" && !sourcePdfFile.name?.toLowerCase().endsWith(".pdf"))
-    || sourcePdfFile.size > 50 * 1024 * 1024
-  )) {
-    throw new Error("Choose a valid game content PDF no larger than 50 MB.");
+  if (sourcePdfFile || coverFile) {
+    uploadLimit = await loadGameUploadLimit();
+    if (
+      (sourcePdfFile && sourcePdfFile.size > uploadLimit.maximumBytes)
+      || (coverFile && coverFile.size > uploadLimit.maximumBytes)
+    ) {
+      throw new Error(gameUploadSizeError(uploadLimit));
+    }
   }
   if (sourcePdfFile && !Array.isArray(pageFiles)) {
     throw new Error("Select card pages from the replacement PDF.");
@@ -316,7 +328,7 @@ export async function updatePdfGame(gameData, { coverFile = null, sourcePdfFile 
         contentType: coverFile.type,
         upsert: false
       });
-      if (error) throw error;
+      if (error) throw describeGameStorageUploadError(error, uploadLimit);
       uploadedPaths.push(newCoverPath);
     }
 
@@ -325,7 +337,7 @@ export async function updatePdfGame(gameData, { coverFile = null, sourcePdfFile 
         contentType: "application/pdf",
         upsert: false
       });
-      if (error) throw error;
+      if (error) throw describeGameStorageUploadError(error, uploadLimit);
       uploadedPaths.push(newSourcePath);
     }
 
@@ -336,7 +348,7 @@ export async function updatePdfGame(gameData, { coverFile = null, sourcePdfFile 
           contentType: "image/png",
           upsert: false
         });
-        if (error) throw error;
+        if (error) throw describeGameStorageUploadError(error, uploadLimit);
         uploadedPaths.push(path);
       }
     }
@@ -608,8 +620,9 @@ export async function updateGameWithCover(gameId, isLocked, changes, coverFile =
   if (coverFile && !coverExtension) {
     throw new Error("Choose a JPEG, PNG, or WebP cover image.");
   }
-  if (coverFile?.size > 10 * 1024 * 1024) {
-    throw new Error("Cover images must be 10 MB or smaller.");
+  const uploadLimit = coverFile ? await loadGameUploadLimit() : null;
+  if (coverFile && coverFile.size > uploadLimit.maximumBytes) {
+    throw new Error(gameUploadSizeError(uploadLimit));
   }
 
   const coverPath = coverFile
@@ -623,7 +636,8 @@ export async function updateGameWithCover(gameId, isLocked, changes, coverFile =
         upsert: false
       });
     if (uploadError) {
-      throw new Error(`Unable to upload the new cover image: ${uploadError.message || "Storage upload failed."}`);
+      const detailedError = describeGameStorageUploadError(uploadError, uploadLimit);
+      throw new Error(`Unable to upload the new cover image: ${detailedError.message || "Storage upload failed."}`);
     }
   }
 
@@ -633,7 +647,6 @@ export async function updateGameWithCover(gameId, isLocked, changes, coverFile =
       ...(changes.title !== undefined ? { title: changes.title } : {}),
       ...(changes.subtitle !== undefined ? { subtitle: changes.subtitle || null } : {}),
       ...(changes.description !== undefined ? { description: changes.description || null } : {}),
-      ...(changes.sort_order !== undefined ? { sort_order: changes.sort_order } : {}),
       ...(changes.price !== undefined ? { price: Number(changes.price) || 0 } : {}),
       ...(coverPath ? { cover_image_url: coverPath } : {}),
       is_locked: isLocked
@@ -826,124 +839,4 @@ export async function deleteGame(gameId) {
   }
 
   return { ...data, removedAssetCount };
-}
-
-export async function updateGameRule(ruleId, ruleText) {
-  const { error } = await supabase
-    .from("game_rules")
-    .update({ rule_text: ruleText })
-    .eq("id", ruleId);
-
-  if (error) throw error;
-}
-
-function validateGameCardData(cardData) {
-  if (!cardData || typeof cardData !== "object" || Array.isArray(cardData)) {
-    throw new Error("Card data is required.");
-  }
-  if (!Number.isInteger(cardData.sort_order) || cardData.sort_order < 1) {
-    throw new Error("A positive card sort order is required.");
-  }
-  if (typeof cardData.front_text !== "string" || typeof cardData.back_text !== "string") {
-    throw new Error("Card text fields must be provided.");
-  }
-  if (!cardData.metadata || typeof cardData.metadata !== "object" || Array.isArray(cardData.metadata)) {
-    throw new Error("Card metadata must be an object.");
-  }
-  if (!Array.isArray(cardData.metadata.pairs)) {
-    throw new Error("Card metadata must include a pairs array.");
-  }
-}
-
-export async function createGameCard(gameId, cardData) {
-  if (typeof gameId !== "string" || !gameId.trim()) {
-    throw new Error("A valid game ID is required.");
-  }
-  validateGameCardData(cardData);
-
-  const { data, error } = await supabase
-    .from("game_cards")
-    .insert({
-      game_id: gameId,
-      sort_order: cardData.sort_order,
-      front_text: cardData.front_text,
-      back_text: cardData.back_text,
-      metadata: cardData.metadata
-    })
-    .select("id,game_id,sort_order,front_text,back_text,metadata,created_at,updated_at")
-    .single();
-
-  if (error?.code === "23505") {
-    const conflict = new Error("Card sort order conflict.");
-    conflict.code = error.code;
-    throw conflict;
-  }
-  if (error) {
-    console.error("Game card creation failed.", { code: error.code || "UNKNOWN" });
-    throw new Error("Unable to create the game card. Please try again.");
-  }
-  return data;
-}
-
-export async function updateGameCard(cardId, cardData) {
-  if (typeof cardId !== "string" || !cardId.trim()) {
-    throw new Error("A valid card ID is required.");
-  }
-  validateGameCardData(cardData);
-
-  const { data, error } = await supabase
-    .from("game_cards")
-    .update({
-      front_text: cardData.front_text,
-      back_text: cardData.back_text,
-      metadata: cardData.metadata
-    })
-    .eq("id", cardId)
-    .select("id,game_id,sort_order,front_text,back_text,metadata,created_at,updated_at")
-    .single();
-
-  if (error) {
-    console.error("Game card update failed.", { code: error.code || "UNKNOWN" });
-    throw new Error("Unable to save the game card. Please try again.");
-  }
-  return data;
-}
-
-export async function createGameRule(gameId, ruleText) {
-  const { data: existingRule, error: lookupError } = await supabase
-    .from("game_rules")
-    .select("id")
-    .eq("game_id", gameId)
-    .limit(1)
-    .maybeSingle();
-
-  if (lookupError) {
-    console.error("Game rule duplicate check failed.", {
-      code: lookupError.code || "UNKNOWN"
-    });
-    throw new Error("Unable to check for an existing rule. Please try again.");
-  }
-  if (existingRule) {
-    throw new Error("A rule already exists for this game.");
-  }
-
-  const { data, error } = await supabase
-    .from("game_rules")
-    .insert({
-      game_id: gameId,
-      sort_order: 1,
-      rule_text: ruleText,
-      metadata: {}
-    })
-    .select("id,game_id,sort_order,rule_text,metadata,created_at,updated_at")
-    .single();
-
-  if (error?.code === "23505") {
-    throw new Error("A rule already exists for this game.");
-  }
-  if (error) {
-    console.error("Game rule creation failed.", { code: error.code || "UNKNOWN" });
-    throw new Error("Unable to create the game rule. Please try again.");
-  }
-  return data;
 }

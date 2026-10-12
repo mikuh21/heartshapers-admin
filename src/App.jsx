@@ -30,6 +30,13 @@ import {
   RotateCcw
 } from "lucide-react";
 import { supabase, COVER_BUCKET, PDF_BUCKET } from "./lib/supabase";
+import {
+  DEFAULT_UPLOAD_SETTINGS,
+  MAX_UPLOAD_SIZE_MB,
+  normalizeUploadSettings,
+  normalizeUploadType,
+  SUPPORTED_UPLOAD_TYPES
+} from "./lib/uploadSettings";
 import { logAdminAction } from "./lib/adminAudit";
 import GamesPage from "./components/GamesPage";
 import {
@@ -69,11 +76,6 @@ const DEFAULT_CATEGORY_OPTIONS = {
   Work: ["Leadership"],
   Ministry: ["Heroes of Faith", "Group Activities"]
 };
-const DEFAULT_UPLOAD_SETTINGS = {
-  maximum_upload_size_mb: 10,
-  acceptable_file_types: ["pdf", "jpeg", "png", "webp"]
-};
-const SUPPORTED_UPLOAD_TYPES = ["pdf", "jpeg", "png", "webp"];
 const PAYMENT_PROOF_BUCKET = "payment-proofs";
 const DEFAULT_PAYMENT_SETTINGS = {
   payment_method: "gcash",
@@ -82,31 +84,6 @@ const DEFAULT_PAYMENT_SETTINGS = {
   instructions: "Scan the GCash QR code to pay."
 };
 const ToastContext = createContext(null);
-
-function normalizeUploadType(value) {
-  const normalized = String(value ?? "").trim().toLowerCase();
-  if (!normalized) return "";
-  return normalized === "jpg" || normalized === "jpeg" ? "jpeg" : normalized;
-}
-
-function normalizeUploadSettings(rawValue = {}) {
-  const maximumUploadSizeMb = Number(rawValue.maximum_upload_size_mb);
-  const maximum = Number.isFinite(maximumUploadSizeMb)
-    ? Math.max(0, Math.min(25, Math.trunc(maximumUploadSizeMb)))
-    : DEFAULT_UPLOAD_SETTINGS.maximum_upload_size_mb;
-  const types = Array.isArray(rawValue.acceptable_file_types)
-    ? rawValue.acceptable_file_types
-        .map(normalizeUploadType)
-        .filter((type) => SUPPORTED_UPLOAD_TYPES.includes(type))
-    : DEFAULT_UPLOAD_SETTINGS.acceptable_file_types;
-
-  return {
-    maximum_upload_size_mb: maximum,
-    acceptable_file_types: [...new Set(types)].length > 0
-      ? [...new Set(types)]
-      : [...DEFAULT_UPLOAD_SETTINGS.acceptable_file_types]
-  };
-}
 
 async function loadUploadSettings() {
   const { data, error } = await supabase
@@ -3525,7 +3502,7 @@ function SettingsPage() {
             <input
               type="range"
               min="0"
-              max="25"
+              max={MAX_UPLOAD_SIZE_MB}
               step="1"
               value={uploadSettings.maximum_upload_size_mb}
               onChange={(event) => setUploadSettings((current) => ({ ...current, maximum_upload_size_mb: Number(event.target.value) }))}

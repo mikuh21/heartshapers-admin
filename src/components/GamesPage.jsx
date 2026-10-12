@@ -18,44 +18,345 @@ import {
 } from "lucide-react";
 import { logAdminAction } from "../lib/adminAudit";
 import { getGameUserAccess, updateGameUserAccess } from "../lib/adminUsers";
+import { getLegacyGameRuleBlocks, parseInlineFormatting } from "../lib/legacyGameRuleBlocks";
 import {
-  createGameCard,
   createPdfGame,
-  createGameRule,
   downloadPdfGameSource,
   deleteGame,
   loadGameAccess,
   listGamesWithCounts,
   loadGameDetails,
-  loadPlacementNames,
   updateGameAccess,
-  updateGameCard,
   updateGameWithCover,
-  updatePdfGame,
-  updateGameRule
+  updatePdfGame
 } from "../lib/games";
+import { gameUploadSizeError, loadGameUploadLimit } from "../lib/uploadSettings";
 
 const CARD_PAGE_SIZE = 20;
-const MAX_GAME_COVER_SIZE = 10 * 1024 * 1024;
-const MAX_GAME_PDF_SIZE = 50 * 1024 * 1024;
+const LEGACY_METADATA_GAME_TYPES = new Set([
+  "bible_action",
+  "bible_draw",
+  "bible_groups",
+  "bible_proverbs",
+  "bible_question",
+  "bible_talk",
+  "inspirational_talk_1",
+  "inspirational_talk_2"
+]);
 
-function formatMetadata(metadata) {
-  return JSON.stringify(metadata ?? {}, null, 2);
+function getGameDescription(game, rules = []) {
+  if (typeof game.description === "string") return game.description;
+  if (!LEGACY_METADATA_GAME_TYPES.has(game.game_type)) return "";
+  const hasLegacySubtitleMetadata = rules.some((rule) => (
+    typeof rule.metadata?.source_rule?.heading === "string"
+    && rule.metadata.source_rule.heading.trim()
+  ));
+  return game.subtitle?.trim().toLocaleLowerCase() === "card game" && hasLegacySubtitleMetadata
+    ? game.subtitle
+    : "";
+}
+
+function getLegacyGameSubtitle(game, rules = []) {
+  const storedSubtitle = typeof game.subtitle === "string" ? game.subtitle : "";
+  if (!LEGACY_METADATA_GAME_TYPES.has(game.game_type)) return storedSubtitle.trim() ? storedSubtitle : "";
+  if (!storedSubtitle.trim()) return "";
+  if (storedSubtitle.trim().toLocaleLowerCase() !== "card game") return storedSubtitle;
+
+  const metadataSubtitle = rules
+    .map((rule) => rule.metadata?.source_rule?.heading)
+    .find((heading) => typeof heading === "string" && heading.trim());
+  return typeof metadataSubtitle === "string" ? metadataSubtitle : storedSubtitle;
+}
+
+function getRuleMetadata(rule) {
+  const metadata = rule.metadata && typeof rule.metadata === "object" && !Array.isArray(rule.metadata)
+    ? rule.metadata
+    : {};
+  const effective = metadata.screen_effective_rule;
+  const source = metadata.source_rule;
+
+  if (effective && typeof effective === "object" && Array.isArray(effective.rules) && effective.rules.length > 0) {
+    return {
+      rules: effective.rules
+    };
+  }
+
+  if (source && typeof source === "object" && Array.isArray(source.rules) && source.rules.length > 0) {
+    return {
+      rules: source.rules
+    };
+  }
+
+  return null;
+}
+
+function isRuleSectionHeading(item) {
+  const text = typeof item === "string" ? item.trim() : "";
+  return Boolean(text && /[A-Z]/.test(text) && text === text.toLocaleUpperCase() && text.length <= 60);
+}
+
+function getRuleSections(rules) {
+  const sections = [];
+  let currentSection = null;
+
+  for (const item of rules) {
+    if (item && typeof item === "object" && !Array.isArray(item)
+      && (item.type === "heading" || item.type === "section")) {
+      currentSection = {
+        heading: typeof item.text === "string" ? item.text : "",
+        items: []
+      };
+      sections.push(currentSection);
+      continue;
+    }
+
+    const structuredItems = !Array.isArray(item) && item && typeof item === "object"
+      ? (Array.isArray(item.rules) ? item.rules : Array.isArray(item.items) ? item.items : null)
+      : null;
+    const structuredHeading = structuredItems
+      ? (typeof item.heading === "string" ? item.heading : typeof item.title === "string" ? item.title : "")
+      : "";
+
+    if (structuredItems) {
+      currentSection = { heading: structuredHeading, items: structuredItems };
+      sections.push(currentSection);
+      continue;
+    }
+
+    if (isRuleSectionHeading(item)) {
+      currentSection = { heading: item.trim(), items: [] };
+      sections.push(currentSection);
+    } else {
+      if (!currentSection) {
+        currentSection = { heading: "", items: [] };
+        sections.push(currentSection);
+      }
+      currentSection.items.push(item);
+    }
+  }
+
+  return sections;
+}
+
+function parseRuleText(ruleText) {
+  const blocks = [];
+  const listStack = [];
+  let paragraphLines = [];
+
+  function flushParagraph() {
+    if (paragraphLines.length > 0) {
+      blocks.push({ type: "paragraph", lines: paragraphLines });
+      paragraphLines = [];
+    }
+  }
+
+  for (const line of String(ruleText ?? "").split(/\r\n?|\n/)) {
+    const match = line.match(/^(\s*)(?:(\d+)[.)]|([-*•]))[ \t]+(.*)$/u);
+    if (!match) {
+      listStack.length = 0;
+      if (!line.trim()) {
+        flushParagraph();
+      } else {
+        paragraphLines.push(line);
+      }
+      continue;
+    }
+
+    flushParagraph();
+    const indent = match[1].replace(/\t/g, "  ").length;
+    const type = match[2] ? "ordered" : "unordered";
+    const item = { text: match[4], number: match[2] ? Number(match[2]) : null, children: [] };
+    while (listStack.length > 0 && listStack[listStack.length - 1].indent > indent) listStack.pop();
+    let parent = listStack[listStack.length - 1];
+    if (parent?.indent === indent) {
+      if (parent.type === type) {
+        parent.items.push(item);
+        continue;
+      }
+      listStack.pop();
+      parent = listStack[listStack.length - 1];
+    }
+
+    const list = {
+      type,
+      indent,
+      items: [],
+      parentItem: parent?.items[parent.items.length - 1] || null
+    };
+    if (parent && indent > parent.indent && list.parentItem) {
+      list.parentItem.children.push(list);
+    } else {
+      blocks.push({ type: "list", list });
+    }
+    list.items.push(item);
+    listStack.push(list);
+  }
+  flushParagraph();
+  return blocks;
+}
+
+function RuleList({ list }) {
+  const ListTag = list.type === "ordered" ? "ol" : "ul";
+  const start = list.type === "ordered"
+    ? list.start ?? (list.items[0]?.number > 1 ? list.items[0].number : undefined)
+    : undefined;
+  return (
+    <ListTag start={start}>
+      {list.items.map((item, index) => (
+        <li key={`${item.number ?? "bullet"}-${index}`}>
+          <RuleItemContent item={item} />
+          {(item.children ?? []).map((child, childIndex) => (
+            <RuleList key={`${child.type}-${childIndex}`} list={child} />
+          ))}
+        </li>
+      ))}
+    </ListTag>
+  );
+}
+
+function InlineFormattedText({ text }) {
+  return parseInlineFormatting(text).map((segment, index) => {
+    if (segment.type === "underline") {
+      return <u key={index}>{segment.text}</u>;
+    }
+    if (segment.type === "bold") {
+      return <strong key={index}>{segment.text}</strong>;
+    }
+    return segment.text;
+  });
+}
+
+function getRuleChildren(item) {
+  if (!item || typeof item !== "object" || Array.isArray(item)) return [];
+  for (const key of ["children", "subitems", "subItems", "sub_items", "subrules", "subRules", "sub_rules", "bullets", "items"]) {
+    if (Array.isArray(item[key])) return item[key];
+  }
+  return [];
+}
+
+function RuleItem({ item }) {
+  const children = getRuleChildren(item);
+  return (
+    <li>
+      <RuleItemContent item={item} />
+      {children.length > 0 && (
+        <ul>
+          {children.map((child, index) => <RuleItem key={index} item={child} />)}
+        </ul>
+      )}
+    </li>
+  );
+}
+
+function RuleItemContent({ item }) {
+  if (typeof item === "string") return <InlineFormattedText text={item} />;
+  if (!item || typeof item !== "object" || Array.isArray(item)) return null;
+
+  if (Array.isArray(item.parts)) {
+    return item.parts.map((part, index) => (
+      part.bold
+        ? <strong key={index}>{part.text}</strong>
+        : <InlineFormattedText key={index} text={part.text} />
+    ));
+  }
+
+  if (item.type === "heading" || item.type === "section") {
+    return typeof item.text === "string" ? <InlineFormattedText text={item.text} /> : null;
+  }
+
+  if ("prefix" in item || "bold" in item || "suffix" in item) {
+    return (
+      <>
+        {typeof item.prefix === "string" ? item.prefix : ""}
+        {typeof item.bold === "string" && item.bold ? <strong>{item.bold}</strong> : null}
+        {typeof item.suffix === "string" ? item.suffix : ""}
+      </>
+    );
+  }
+
+  return typeof item.text === "string" ? <InlineFormattedText text={item.text} /> : null;
+}
+
+function FormattedRule({ rule, gameType }) {
+  const metadata = getRuleMetadata(rule);
+  if (metadata) {
+    const legacyBlocks = getLegacyGameRuleBlocks(gameType, rule.metadata?.source_rule);
+    const sections = getRuleSections(metadata.rules);
+    return (
+      <div className="games-rule-entry">
+        <div className="games-rule-content">
+          {legacyBlocks
+            ? legacyBlocks.map((block, index) => block.type === "list"
+              ? <RuleList key={index} list={block.list} />
+              : <p className="games-rule-paragraph" key={index}><RuleItemContent item={block.item} /></p>)
+            : sections.map((section, sectionIndex) => {
+            const explicitSection = Boolean(section.heading);
+            const displayAsBullets = explicitSection && /\bRULES$/i.test(section.heading);
+            const hasRuleHierarchy = section.items.some((item) => getRuleChildren(item).length > 0);
+            const ListTag = displayAsBullets ? "ul" : "ol";
+
+            return (
+              <section className="games-rule-group" key={sectionIndex}>
+                {section.heading && <h6><InlineFormattedText text={section.heading} /></h6>}
+                {section.items.length > 0 && (
+                  explicitSection && !displayAsBullets && !hasRuleHierarchy
+                    ? section.items.map((item, itemIndex) => (
+                      <p className="games-rule-paragraph" key={itemIndex}><RuleItemContent item={item} /></p>
+                    ))
+                    : <ListTag>
+                      {section.items.map((item, itemIndex) => <RuleItem key={itemIndex} item={item} />)}
+                    </ListTag>
+                )}
+              </section>
+            );
+          })}
+        </div>
+      </div>
+    );
+  }
+
+  const blocks = parseRuleText(rule.rule_text);
+  return (
+    <div className="games-rule-entry">
+      <strong>Rule {rule.sort_order}</strong>
+      <div className="games-rule-content">
+        {blocks.map((block, index) => block.type === "list"
+          ? <RuleList key={index} list={block.list} />
+          : <p key={index}><InlineFormattedText text={block.lines.join("\n")} /></p>)}
+      </div>
+    </div>
+  );
 }
 
 function GameCoverFrame({ src, className = "" }) {
   const [failed, setFailed] = useState(false);
+  const [aspectRatio, setAspectRatio] = useState(null);
 
   useEffect(() => {
     setFailed(false);
+    setAspectRatio(null);
   }, [src]);
 
   const hasCover = Boolean(src) && !failed;
 
   return (
-    <span className={`games-cover-frame${className ? ` ${className}` : ""}${hasCover ? "" : " is-placeholder"}`} aria-hidden="true">
+    <span
+      className={`games-cover-frame${className ? ` ${className}` : ""}${hasCover ? " has-cover" : " is-placeholder"}`}
+      style={hasCover ? { aspectRatio: aspectRatio ?? "16 / 9" } : undefined}
+      aria-hidden="true"
+    >
       {hasCover
-        ? <img src={src} alt="" onError={() => setFailed(true)} />
+        ? <img
+            src={src}
+            alt=""
+            onLoad={(event) => {
+              const { naturalWidth, naturalHeight } = event.currentTarget;
+              if (naturalWidth > 0 && naturalHeight > 0) {
+                setAspectRatio(naturalWidth / naturalHeight);
+              }
+            }}
+            onError={() => setFailed(true)}
+          />
         : <Gamepad2 size={19} />}
     </span>
   );
@@ -368,6 +669,29 @@ export default function GamesPage({ canManageGames, ConfirmModal, showToast }) {
   const [accessGame, setAccessGame] = useState(null);
   const [deleteTarget, setDeleteTarget] = useState(null);
   const [refreshKey, setRefreshKey] = useState(0);
+  const [gameUploadLimit, setGameUploadLimit] = useState(null);
+  const [uploadLimitError, setUploadLimitError] = useState("");
+
+  useEffect(() => {
+    if (!addGameOpen && !editingPdfGame && !selectedGame) return undefined;
+    let active = true;
+    loadGameUploadLimit()
+      .then((limit) => {
+        if (active) {
+          setGameUploadLimit(limit);
+          setUploadLimitError("");
+        }
+      })
+      .catch((settingsError) => {
+        if (active) {
+          setGameUploadLimit(null);
+          setUploadLimitError(settingsError.message || "Unable to load the configured upload limit.");
+        }
+      });
+    return () => {
+      active = false;
+    };
+  }, [addGameOpen, editingPdfGame?.id, selectedGame?.id]);
 
   useEffect(() => {
     let active = true;
@@ -494,7 +818,7 @@ export default function GamesPage({ canManageGames, ConfirmModal, showToast }) {
               <tbody>
                 {filteredGames.map((game) => (
                   <tr key={game.id}>
-                    <td><div className="games-name-cell"><GameTableCover src={game.cover_display_url} /><div><strong>{game.title}</strong><span>{game.subtitle || game.id}</span></div></div></td>
+                    <td><div className="games-name-cell"><GameTableCover src={game.cover_display_url} /><div><strong>{game.title}</strong>{game.subtitle?.trim() ? <span>{game.subtitle}</span> : null}</div></div></td>
                     <td className="games-cards-cell">{game.cardCount}</td>
                     <td className="games-access-cell">
                       <button type="button" className="icon-btn" title="User Access" aria-label={`Manage user access for ${game.title}`} onClick={() => setAccessGame(game)}>
@@ -526,6 +850,8 @@ export default function GamesPage({ canManageGames, ConfirmModal, showToast }) {
         <GameDetailsModal
           key={selectedGame.id}
           game={selectedGame}
+          gameUploadLimit={gameUploadLimit}
+          uploadLimitError={uploadLimitError}
           onClose={() => setSelectedGame(null)}
           onSaved={(updatedGame) => {
             setGames((current) => current.map((game) => game.id === updatedGame.id
@@ -540,6 +866,8 @@ export default function GamesPage({ canManageGames, ConfirmModal, showToast }) {
       {addGameOpen && (
         <AddGameModal
           existingGames={games}
+          gameUploadLimit={gameUploadLimit}
+          uploadLimitError={uploadLimitError}
           onClose={() => setAddGameOpen(false)}
           onCreated={async (game) => {
             const auditSucceeded = await logAdminAction({
@@ -578,6 +906,8 @@ export default function GamesPage({ canManageGames, ConfirmModal, showToast }) {
           key={editingPdfGame.id}
           game={editingPdfGame}
           existingGames={games}
+          gameUploadLimit={gameUploadLimit}
+          uploadLimitError={uploadLimitError}
           onClose={() => setEditingPdfGame(null)}
           onSaved={async (updatedGame) => {
             const auditSucceeded = await logAdminAction({
@@ -778,11 +1108,22 @@ function GameUserAccessModal({ game, onClose, showToast }) {
   );
 }
 
-function AddGameModal({ game = null, existingGames, nextSortOrder, onClose, onCreated, onSaved, showToast }) {
+function AddGameModal({
+  game = null,
+  existingGames,
+  nextSortOrder,
+  gameUploadLimit,
+  uploadLimitError,
+  onClose,
+  onCreated,
+  onSaved,
+  showToast
+}) {
   const isEditing = Boolean(game);
   const [form, setForm] = useState(() => ({
     title: game?.title || "",
-    subtitle: game?.subtitle || "",
+    subtitle: typeof game?.subtitle === "string" && game.subtitle.trim() ? game.subtitle : "",
+    description: typeof game?.description === "string" ? game.description : "",
     rules: "",
     price: String(game?.price ?? 0),
     is_locked: Boolean(game?.is_locked)
@@ -889,6 +1230,7 @@ function AddGameModal({ game = null, existingGames, nextSortOrder, onClose, onCr
   function chooseCover(event) {
     const file = event.target.files?.[0] || null;
     event.target.value = "";
+    if (!file) return;
     if (file && !["image/jpeg", "image/png", "image/webp"].includes(file.type)) {
       clearCoverPreview();
       setCoverPreviewUrl(game?.cover_display_url || game?.cover_image_url || "");
@@ -896,11 +1238,18 @@ function AddGameModal({ game = null, existingGames, nextSortOrder, onClose, onCr
       setErrors((current) => ({ ...current, cover: "Choose a JPEG, PNG, or WebP cover image." }));
       return;
     }
-    if (file && file.size > MAX_GAME_COVER_SIZE) {
+    if (!gameUploadLimit) {
       clearCoverPreview();
       setCoverPreviewUrl(game?.cover_display_url || game?.cover_image_url || "");
       setCoverFile(null);
-      setErrors((current) => ({ ...current, cover: "Cover images must be 10 MB or smaller." }));
+      setErrors((current) => ({ ...current, cover: uploadLimitError || "The configured upload limit is unavailable. Reload the Games page before uploading." }));
+      return;
+    }
+    if (file && file.size > gameUploadLimit.maximumBytes) {
+      clearCoverPreview();
+      setCoverPreviewUrl(game?.cover_display_url || game?.cover_image_url || "");
+      setCoverFile(null);
+      setErrors((current) => ({ ...current, cover: gameUploadSizeError(gameUploadLimit) }));
       return;
     }
     clearCoverPreview();
@@ -976,8 +1325,15 @@ function AddGameModal({ game = null, existingGames, nextSortOrder, onClose, onCr
       setErrors((current) => ({ ...current, pdf: "Choose a PDF file." }));
       return;
     }
-    if (file.size > MAX_GAME_PDF_SIZE) {
-      setErrors((current) => ({ ...current, pdf: "PDF files must be 50 MB or smaller." }));
+    if (!gameUploadLimit) {
+      setErrors((current) => ({
+        ...current,
+        pdf: uploadLimitError || "The configured upload limit is unavailable. Reload the Games page before uploading."
+      }));
+      return;
+    }
+    if (file.size > gameUploadLimit.maximumBytes) {
+      setErrors((current) => ({ ...current, pdf: gameUploadSizeError(gameUploadLimit) }));
       return;
     }
     setPdfFile(file);
@@ -1037,7 +1393,12 @@ function AddGameModal({ game = null, existingGames, nextSortOrder, onClose, onCr
       nextErrors.price = "Enter a valid price of zero or greater, with up to two decimal places.";
     }
     if (!isEditing && !coverFile) nextErrors.cover = "Upload a separate game cover image.";
-    if (!isEditing && (!pdfFile || !pdfDocument)) nextErrors.pdf = "Upload a valid game content PDF.";
+    if (!isEditing && !gameUploadLimit) {
+      nextErrors.pdf = uploadLimitError || "The configured upload limit is unavailable. Reload the Games page before uploading.";
+    } else if (!isEditing && (!pdfFile || !pdfDocument)) nextErrors.pdf = "Upload a valid game content PDF.";
+    if (isEditing && (pdfFile || replaceCardContent) && !gameUploadLimit) {
+      nextErrors.pdf = uploadLimitError || "The configured upload limit is unavailable. Reload the Games page before uploading a replacement.";
+    }
     if (isEditing && pdfFile && !replaceCardContent) {
       nextErrors.pdf = "Confirm replacing the saved card faces before uploading a replacement PDF.";
     }
@@ -1076,7 +1437,7 @@ function AddGameModal({ game = null, existingGames, nextSortOrder, onClose, onCr
         title: form.title.trim(),
         game_type: "pdf_deck",
         subtitle: form.subtitle.trim(),
-        description: game?.description || null,
+        description: form.description.trim(),
         price: form.price.trim(),
         is_locked: Boolean(form.is_locked),
         sort_order: isEditing ? Number(game.sort_order) : nextSortOrder,
@@ -1133,6 +1494,8 @@ function AddGameModal({ game = null, existingGames, nextSortOrder, onClose, onCr
                   {errors.title && <span className="field-error" id="new-game-title-error">{errors.title}</span>}
                   <label className="pdf-game-field-label" htmlFor="new-game-subtitle">Subtitle <span className="muted">(optional)</span></label>
                   <input id="new-game-subtitle" value={form.subtitle} onChange={(event) => update("subtitle", event.target.value)} />
+                  <label className="pdf-game-field-label" htmlFor="new-game-description">Description <span className="muted">(optional)</span></label>
+                  <textarea id="new-game-description" rows={3} value={form.description} onChange={(event) => update("description", event.target.value)} />
                   <label className="pdf-game-field-label" htmlFor="new-game-rules">Rules <span className="required-marker">*</span></label>
                   <textarea id="new-game-rules" rows={5} value={form.rules} onChange={(event) => update("rules", event.target.value)} aria-invalid={Boolean(errors.rules)} aria-describedby={errors.rules ? "new-game-rules-error" : undefined} required />
                   {errors.rules && <span className="field-error" id="new-game-rules-error">{errors.rules}</span>}
@@ -1173,9 +1536,13 @@ function AddGameModal({ game = null, existingGames, nextSortOrder, onClose, onCr
                       <ImagePlus size={18} />
                       <span>{coverFile ? `Replace Cover · ${coverFile.name}` : isEditing ? "Choose a replacement cover image (optional)" : <>Choose Game Cover Image <span className="required-marker">*</span></>}</span>
                     </label>
-                    <input id="new-game-cover" className="pdf-game-file-input" type="file" accept="image/jpeg,image/png,image/webp" onChange={chooseCover} disabled={saving} aria-invalid={Boolean(errors.cover)} aria-describedby={errors.cover ? "new-game-cover-error" : undefined} />
+                    <input id="new-game-cover" className="pdf-game-file-input" type="file" accept="image/jpeg,image/png,image/webp" onChange={chooseCover} disabled={saving || !gameUploadLimit} aria-invalid={Boolean(errors.cover)} aria-describedby={errors.cover ? "new-game-cover-error" : undefined} />
                   </div>
-                  <span className="field-hint">JPEG, PNG, or WebP; maximum 10 MB. The image is kept at its original aspect ratio.</span>
+                  <span className="field-hint">{gameUploadLimit
+                    ? `JPEG, PNG, or WebP; maximum ${gameUploadLimit.maximumMb} MB. The image is kept at its original aspect ratio.`
+                    : "Cover upload limit unavailable."}</span>
+                  {uploadLimitError && <span className="field-error">{uploadLimitError}</span>}
+                  {errors.cover && <span className="field-error" id="new-game-cover-error">{errors.cover}</span>}
                   {isEditing && !coverFile && <span className="field-hint">The saved cover is kept unless you choose a replacement.</span>}
                   {(isEditing || coverPreviewUrl) && <GameCoverFrame src={coverPreviewUrl} className="games-cover-preview-frame" />}
                   {coverFile && <span className="field-hint">{coverFile.name}</span>}
@@ -1189,9 +1556,12 @@ function AddGameModal({ game = null, existingGames, nextSortOrder, onClose, onCr
                       <FileText size={18} />
                       <span>{pdfFile ? `Replace PDF · ${pdfFile.name}` : isEditing ? "Choose a replacement PDF (optional)" : <>Choose Game Content PDF <span className="required-marker">*</span></>}</span>
                     </label>
-                    <input id="new-game-pdf" className="pdf-game-file-input" type="file" accept="application/pdf,.pdf" onChange={choosePdf} disabled={saving} aria-invalid={Boolean(errors.pdf)} aria-describedby={errors.pdf ? "new-game-pdf-error" : undefined} />
+                    <input id="new-game-pdf" className="pdf-game-file-input" type="file" accept="application/pdf,.pdf" onChange={choosePdf} disabled={saving || !gameUploadLimit} aria-invalid={Boolean(errors.pdf)} aria-describedby={errors.pdf ? "new-game-pdf-error" : undefined} />
                   </div>
-                  <span className="field-hint">PDF; maximum 50 MB. Each selected page becomes one complete card face.</span>
+                  <span className="field-hint">{gameUploadLimit
+                    ? `PDF; maximum ${gameUploadLimit.maximumMb} MB. Each selected page becomes one complete card face.`
+                    : "PDF; upload limit unavailable. Each selected page becomes one complete card face."}</span>
+                  {uploadLimitError && <span className="field-error">{uploadLimitError}</span>}
                   {isEditing && !pdfFile && <span className="field-hint">The current source PDF and saved card-face images are kept unless you explicitly replace the content.</span>}
                   {pdfFile && <span className="field-hint">{pdfFile.name} · {pdfPages.length} {pdfPages.length === 1 ? "page" : "pages"}</span>}
                   {isEditing && (
@@ -1254,7 +1624,8 @@ function AddGameModal({ game = null, existingGames, nextSortOrder, onClose, onCr
                   {coverPreviewUrl && <img src={coverPreviewUrl} alt={`${form.title.trim()} cover`} />}
                   <div>
                     <h4>{form.title.trim()}</h4>
-                    <span>{form.subtitle.trim() || "No subtitle"}</span>
+                    {form.subtitle.trim() ? <span>{form.subtitle.trim()}</span> : null}
+                    {form.description.trim() ? <span>{form.description.trim()}</span> : null}
                     <span>Price: ₱{Number(form.price).toFixed(2)}</span>
                     <span>Access: {form.is_locked ? "Locked" : "Free"}</span>
                     <span>{selectedPageNumbers.length} {selectedPageNumbers.length === 1 ? "card" : "cards"}</span>
@@ -1309,27 +1680,22 @@ function AddGameModal({ game = null, existingGames, nextSortOrder, onClose, onCr
   );
 }
 
-function GameDetailsModal({ game, onClose, onSaved, showToast }) {
-  const [details, setDetails] = useState({ rules: [], cards: [], placements: [] });
+function GameDetailsModal({ game, gameUploadLimit, uploadLimitError, onClose, onSaved, showToast }) {
+  const [details, setDetails] = useState({ rules: [], cards: [] });
   const [loadErrors, setLoadErrors] = useState({});
   const [loading, setLoading] = useState(true);
   const [accessLoaded, setAccessLoaded] = useState(false);
   const [form, setForm] = useState({
     title: game.title || "",
-    subtitle: game.subtitle || "",
-    description: game.description || "",
+    subtitle: getLegacyGameSubtitle(game),
+    description: getGameDescription(game),
     price: String(game.price ?? 0),
-    sort_order: String(game.sort_order ?? 0),
     is_locked: Boolean(game.is_locked)
   });
   const [coverFile, setCoverFile] = useState(null);
   const [coverPreviewUrl, setCoverPreviewUrl] = useState(game.cover_display_url || game.cover_image_url || "");
   const [informationErrors, setInformationErrors] = useState({});
-  const [ruleDrafts, setRuleDrafts] = useState({});
   const [savingInfo, setSavingInfo] = useState(false);
-  const [savingRuleId, setSavingRuleId] = useState(null);
-  const [addRuleOpen, setAddRuleOpen] = useState(false);
-  const [cardEditor, setCardEditor] = useState(null);
   const [cardPage, setCardPage] = useState(0);
   const coverPreviewUrlRef = useRef("");
 
@@ -1347,7 +1713,7 @@ function GameDetailsModal({ game, onClose, onSaved, showToast }) {
       loadGameAccess(game.id)
     ]).then(async ([detailsResult, accessResult]) => {
       const errors = {};
-      let nextDetails = { rules: [], cards: [], placements: [] };
+      let nextDetails = { rules: [], cards: [] };
 
       if (detailsResult.status === "rejected") {
         errors.details = detailsResult.reason?.message || "Unable to load game details.";
@@ -1355,26 +1721,25 @@ function GameDetailsModal({ game, onClose, onSaved, showToast }) {
         const result = detailsResult.value;
         if (result.rules.error) errors.rules = result.rules.error.message;
         if (result.cards.error) errors.cards = result.cards.error.message;
-        let placements = result.placements.data;
-        if (result.placements.error) {
-          errors.placements = result.placements.error.message;
-          placements = [];
-        } else {
-          try {
-            placements = await loadPlacementNames(placements);
-          } catch (placementError) {
-            errors.placements = placementError.message || "Unable to load placements.";
-            placements = [];
-          }
-        }
         nextDetails = {
           rules: result.rules.data,
-          cards: result.cards.data,
-          placements
+          cards: result.cards.data
         };
       }
 
       if (!active) return;
+
+      if (detailsResult.status === "fulfilled") {
+        setForm((current) => ({
+          ...current,
+          subtitle: current.subtitle === getLegacyGameSubtitle(game)
+            ? getLegacyGameSubtitle(game, detailsResult.value.rules.data)
+            : current.subtitle,
+          description: current.description === getGameDescription(game)
+            ? getGameDescription(game, detailsResult.value.rules.data)
+            : current.description
+        }));
+      }
 
       if (accessResult.status === "fulfilled" &&
           typeof accessResult.value?.is_locked === "boolean") {
@@ -1392,7 +1757,6 @@ function GameDetailsModal({ game, onClose, onSaved, showToast }) {
 
       setLoadErrors(errors);
       setDetails(nextDetails);
-      setRuleDrafts(Object.fromEntries(nextDetails.rules.map((rule) => [rule.id, rule.rule_text || ""])));
     }).finally(() => {
       if (active) setLoading(false);
     });
@@ -1413,8 +1777,12 @@ function GameDetailsModal({ game, onClose, onSaved, showToast }) {
       showToast("Choose a JPEG, PNG, or WebP cover image.", "error");
       return;
     }
-    if (file.size > MAX_GAME_COVER_SIZE) {
-      showToast("Cover images must be 10 MB or smaller.", "error");
+    if (!gameUploadLimit) {
+      showToast(uploadLimitError || "The configured upload limit is unavailable. Reload the Games page before uploading.", "error");
+      return;
+    }
+    if (file.size > gameUploadLimit.maximumBytes) {
+      showToast(gameUploadSizeError(gameUploadLimit), "error");
       return;
     }
     if (coverPreviewUrlRef.current) URL.revokeObjectURL(coverPreviewUrlRef.current);
@@ -1436,37 +1804,37 @@ function GameDetailsModal({ game, onClose, onSaved, showToast }) {
   async function saveInformation(event) {
     event.preventDefault();
     const title = form.title.trim();
-    const sortOrder = Number(form.sort_order);
     const price = Number(form.price);
     const errors = {};
     if (!title) errors.title = "Enter a game title.";
     if (!/^\d+(?:\.\d{1,2})?$/.test(form.price.trim()) || !Number.isFinite(price) || price < 0) {
       errors.price = "Enter a valid price of zero or greater, with up to two decimal places.";
     }
-    if (!form.sort_order.trim() || !Number.isInteger(sortOrder)) {
-      errors.sort_order = "Enter a whole-number sort order.";
-    }
     setInformationErrors(errors);
     if (Object.keys(errors).length > 0) {
       return;
     }
 
+    const description = form.description.trim();
+    const descriptionChanged = description !== (game.description ?? "");
+    const subtitle = form.subtitle.trim();
+    const subtitleChanged = subtitle !== (game.subtitle ?? "");
     setSavingInfo(true);
     try {
       const updatedGame = await updateGameWithCover(game.id, Boolean(form.is_locked), {
         title,
-        subtitle: form.subtitle,
-        description: form.description,
-        sort_order: sortOrder,
+        ...(subtitleChanged ? { subtitle } : {}),
+        ...(descriptionChanged ? { description } : {}),
         price
       }, coverFile);
       const accessChanged = Boolean(game.is_locked) !== Boolean(updatedGame.is_locked);
+      const nonAccessChanges = title !== game.title
+        || subtitleChanged
+        || descriptionChanged
+        || price !== Number(game.price || 0)
+        || Boolean(coverFile);
       const auditSucceeded = await logAdminAction({
-        action: accessChanged && title === game.title &&
-          form.subtitle === (game.subtitle || "") &&
-          form.description === (game.description || "") &&
-          sortOrder === Number(game.sort_order) &&
-          price === Number(game.price || 0)
+        action: accessChanged && !nonAccessChanges
           ? "game_access_changed"
           : "game_information_updated",
         targetType: "game",
@@ -1475,9 +1843,8 @@ function GameDetailsModal({ game, onClose, onSaved, showToast }) {
         details: {
           changed_fields: [
             ...(title !== game.title ? ["title"] : []),
-            ...(form.subtitle !== (game.subtitle || "") ? ["subtitle"] : []),
-            ...(form.description !== (game.description || "") ? ["description"] : []),
-            ...(sortOrder !== Number(game.sort_order) ? ["sort order"] : []),
+            ...(subtitleChanged ? ["subtitle"] : []),
+            ...(descriptionChanged ? ["description"] : []),
             ...(price !== Number(game.price || 0) ? ["price"] : []),
             ...(coverFile ? ["cover image"] : []),
             ...(accessChanged ? ["access"] : [])
@@ -1501,7 +1868,6 @@ function GameDetailsModal({ game, onClose, onSaved, showToast }) {
         subtitle: updatedGame.subtitle || "",
         description: updatedGame.description || "",
         price: String(updatedGame.price ?? 0),
-        sort_order: String(updatedGame.sort_order ?? 0),
         is_locked: Boolean(updatedGame.is_locked)
       });
       showToast(!auditSucceeded
@@ -1516,215 +1882,6 @@ function GameDetailsModal({ game, onClose, onSaved, showToast }) {
     } finally {
       setSavingInfo(false);
     }
-  }
-
-  async function saveRule(rule) {
-    setSavingRuleId(rule.id);
-    try {
-      await updateGameRule(rule.id, ruleDrafts[rule.id] || "");
-      setDetails((current) => ({
-        ...current,
-        rules: current.rules.map((item) => item.id === rule.id
-          ? { ...item, rule_text: ruleDrafts[rule.id] || "" }
-          : item)
-      }));
-      const auditSucceeded = await logAdminAction({
-        action: "game_rule_updated",
-        targetType: "game",
-        targetId: game.id,
-        targetName: game.title,
-        details: {
-          rule_id: rule.id,
-          sort_order: rule.sort_order,
-          changed_fields: ["rule_text"]
-        }
-      }).catch((auditError) => {
-        console.error("Game rule update audit logging failed.", {
-          code: auditError?.code || auditError?.name || "AUDIT_LOG_FAILED"
-        });
-        return false;
-      });
-      showToast(
-        auditSucceeded
-          ? "Game rule saved successfully."
-          : "Game rule saved, but its audit log could not be saved.",
-        auditSucceeded ? "success" : "error"
-      );
-    } catch (saveError) {
-      showToast(saveError.message || "Unable to save game rule.", "error");
-    } finally {
-      setSavingRuleId(null);
-    }
-  }
-
-  async function createRule(ruleText) {
-    let createdRule;
-    try {
-      createdRule = await createGameRule(game.id, ruleText);
-    } catch (createError) {
-      if (createError.message !== "A rule already exists for this game.") throw createError;
-
-      try {
-        const refreshed = await loadGameDetails(game.id);
-        if (refreshed.rules.error) throw refreshed.rules.error;
-        setDetails((current) => ({ ...current, rules: refreshed.rules.data }));
-        setRuleDrafts(Object.fromEntries(
-          refreshed.rules.data.map((rule) => [rule.id, rule.rule_text || ""])
-        ));
-        showToast("A rule already exists for this game.", "error");
-      } catch (refreshError) {
-        console.error("Existing game rule refresh failed.", {
-          code: refreshError?.code || refreshError?.name || "UNKNOWN"
-        });
-        showToast("A rule already exists, but the rule list could not be refreshed.", "error");
-      }
-      setAddRuleOpen(false);
-      return false;
-    }
-
-    setDetails((current) => ({
-      ...current,
-      rules: [...current.rules, createdRule]
-    }));
-    setRuleDrafts((current) => ({ ...current, [createdRule.id]: createdRule.rule_text || "" }));
-
-    const auditSucceeded = await logAdminAction({
-      action: "game_rule_created",
-      targetType: "game",
-      targetId: game.id,
-      targetName: game.title,
-      details: {
-        rule_id: createdRule.id,
-        sort_order: 1,
-        created_fields: ["rule_text"]
-      }
-    }).catch((auditError) => {
-      console.error("Game rule creation audit logging failed.", {
-        code: auditError?.code || auditError?.name || "AUDIT_LOG_FAILED"
-      });
-      return false;
-    });
-
-    let refreshSucceeded = true;
-    try {
-      const refreshed = await loadGameDetails(game.id);
-      if (refreshed.rules.error) throw refreshed.rules.error;
-      setDetails((current) => ({ ...current, rules: refreshed.rules.data }));
-      setRuleDrafts(Object.fromEntries(
-        refreshed.rules.data.map((rule) => [rule.id, rule.rule_text || ""])
-      ));
-    } catch (refreshError) {
-      refreshSucceeded = false;
-      console.error("Game rules refresh failed after rule creation.", {
-        code: refreshError?.code || refreshError?.name || "UNKNOWN"
-      });
-    }
-
-    if (!auditSucceeded || !refreshSucceeded) {
-      const issue = [
-        !auditSucceeded && "its audit log could not be saved",
-        !refreshSucceeded && "the rule list could not be refreshed"
-      ].filter(Boolean).join(" and ");
-      showToast(`Rule created, but ${issue}.`, "error");
-    } else {
-      showToast("Game rule added successfully.", "success");
-    }
-    return true;
-  }
-
-  async function refreshCards() {
-    const refreshed = await loadGameDetails(game.id);
-    if (refreshed.cards.error) throw refreshed.cards.error;
-    setDetails((current) => ({ ...current, cards: refreshed.cards.data }));
-    setCardPage((current) => {
-      const lastPage = Math.max(0, Math.ceil(refreshed.cards.data.length / CARD_PAGE_SIZE) - 1);
-      return Math.min(current, lastPage);
-    });
-    return refreshed.cards.data;
-  }
-
-  async function saveCard(card, form) {
-    const sortOrder = card?.sort_order ??
-      (details.cards.reduce((max, existingCard) => Math.max(max, existingCard.sort_order), 0) + 1);
-    const payload = buildGameCardData(game, form, card, sortOrder);
-
-    let savedCard;
-    try {
-      savedCard = card
-        ? await updateGameCard(card.id, payload)
-        : await createGameCard(game.id, payload);
-    } catch (saveError) {
-      if (!card && saveError.code === "23505") {
-        try {
-          await refreshCards();
-          onSaved(game);
-          showToast("Another card was added at the same time. The list was refreshed; please retry.", "error");
-        } catch (refreshError) {
-          console.error("Card list refresh failed after sort order conflict.", {
-            code: refreshError?.code || refreshError?.name || "UNKNOWN"
-          });
-          showToast("Card order conflict. Refresh the game cards and try again.", "error");
-        }
-        return false;
-      }
-      showToast(saveError.message || "Unable to save the game card.", "error");
-      return false;
-    }
-
-    let refreshSucceeded = true;
-    try {
-      const cards = await refreshCards();
-      if (!card) setCardPage(Math.max(0, Math.ceil(cards.length / CARD_PAGE_SIZE) - 1));
-    } catch (refreshError) {
-      refreshSucceeded = false;
-      console.error("Game card list refresh failed after save.", {
-        code: refreshError?.code || refreshError?.name || "UNKNOWN"
-      });
-    }
-    onSaved(game);
-
-    const auditSucceeded = await logAdminAction({
-      action: card ? "game_card_updated" : "game_card_created",
-      targetType: "game",
-      targetId: game.id,
-      targetName: game.title,
-      details: {
-        card_id: savedCard.id,
-        sort_order: savedCard.sort_order,
-        changed_fields: [
-          "front_text",
-          "back_text",
-          "metadata.pairs",
-          "metadata.source_card",
-          ...(game.game_type === "bible_question" ? ["metadata.category"] : [])
-        ]
-      }
-    }).catch((auditError) => {
-      console.error("Game card audit logging failed.", {
-        action: card ? "game_card_updated" : "game_card_created",
-        code: auditError?.code || auditError?.name || "AUDIT_LOG_FAILED"
-      });
-      return false;
-    });
-
-      if (!refreshSucceeded) {
-        showToast(
-          auditSucceeded
-            ? "Card saved, but the card list could not be refreshed."
-            : "Card saved, but the card list could not be refreshed and its audit log could not be saved.",
-          "error"
-        );
-      } else {
-        showToast(
-          auditSucceeded
-            ? card ? "Game card saved successfully." : "Game card added successfully."
-            : card
-              ? "Game card saved, but its audit log could not be saved."
-              : "Game card added, but its audit log could not be saved.",
-          auditSucceeded ? "success" : "error"
-        );
-      }
-    return true;
   }
 
   return (
@@ -1751,9 +1908,6 @@ function GameDetailsModal({ game, onClose, onSaved, showToast }) {
               <label className="pdf-game-field-label" htmlFor="edit-game-price">Price (₱) <span className="required-marker">*</span></label>
               <input id="edit-game-price" type="number" min="0" step="0.01" value={form.price} onChange={(event) => updateInformationField("price", event.target.value)} aria-invalid={Boolean(informationErrors.price)} aria-describedby={informationErrors.price ? "edit-game-price-error" : undefined} required />
               {informationErrors.price && <span className="field-error" id="edit-game-price-error">{informationErrors.price}</span>}
-              <label className="pdf-game-field-label" htmlFor="edit-game-sort-order">Sort Order</label>
-              <input id="edit-game-sort-order" type="number" step="1" value={form.sort_order} onChange={(event) => updateInformationField("sort_order", event.target.value)} aria-invalid={Boolean(informationErrors.sort_order)} aria-describedby={informationErrors.sort_order ? "edit-game-sort-order-error" : undefined} required />
-              {informationErrors.sort_order && <span className="field-error" id="edit-game-sort-order-error">{informationErrors.sort_order}</span>}
               <div className="games-access-field">
                 <span className="games-field-label">Game access</span>
                 <div className="access-box games-access-box">
@@ -1788,6 +1942,9 @@ function GameDetailsModal({ game, onClose, onSaved, showToast }) {
                       : game.cover_image_url
                         ? "The saved cover will be kept unless you choose a replacement."
                         : "No cover is saved. Upload one to add it to this game."}</span>
+                    <span className="field-hint">{gameUploadLimit
+                      ? `JPEG, PNG, or WebP; maximum ${gameUploadLimit.maximumMb} MB.`
+                      : uploadLimitError || "Cover upload limit unavailable."}</span>
                     <label className="pdf-game-upload games-cover-upload" htmlFor="edit-game-cover">
                       <ImagePlus size={18} />
                       <span>{coverFile
@@ -1802,7 +1959,7 @@ function GameDetailsModal({ game, onClose, onSaved, showToast }) {
                       type="file"
                       accept="image/jpeg,image/png,image/webp"
                       onChange={chooseCover}
-                      disabled={savingInfo}
+                      disabled={savingInfo || !gameUploadLimit}
                     />
                   </div>
                 </div>
@@ -1811,51 +1968,35 @@ function GameDetailsModal({ game, onClose, onSaved, showToast }) {
           </section>
 
           <section className="games-detail-section">
-            <h4>Placements</h4>
-            {loadErrors.placements ? <div className="error-box">{loadErrors.placements}</div> : loading ? <p className="field-hint">Loading placements...</p> : details.placements.length === 0 ? <p className="field-hint">This game has no placements.</p> : (
-              <ul className="games-placement-list">{details.placements.map((placement) => <li key={placement.id}>{placement.pillarName} <span aria-hidden="true">→</span> {placement.categoryName}</li>)}</ul>
-            )}
-          </section>
-
-          <section className="games-detail-section">
             <h4>Rules</h4>
             {loadErrors.rules ? <div className="error-box">{loadErrors.rules}</div> : loading ? <p className="field-hint">Loading rules...</p> : details.rules.length === 0 ? (
-              <div className="games-empty-rule">
-                <p className="field-hint">No rule has been created for this game yet.</p>
-                <button type="button" className="secondary-btn small" onClick={() => setAddRuleOpen(true)}>
-                  <Plus size={15} /> Add Rule
-                </button>
-              </div>
+              <p className="field-hint">No rules have been saved for this game.</p>
             ) : details.rules.map((rule) => (
-              <div className="games-rule-entry" key={rule.id}>
-                <label>Rule {rule.sort_order}<textarea rows={5} value={ruleDrafts[rule.id] ?? ""} onChange={(event) => setRuleDrafts((current) => ({ ...current, [rule.id]: event.target.value }))} /></label>
-                <details><summary>Structured metadata (read-only)</summary><pre>{formatMetadata(rule.metadata)}</pre></details>
-                <div className="games-section-actions"><button type="button" className="secondary-btn small" onClick={() => saveRule(rule)} disabled={savingRuleId === rule.id}>{savingRuleId === rule.id ? "Saving..." : "Save Rule Text"}</button></div>
-              </div>
+              <FormattedRule key={rule.id} rule={rule} gameType={game.game_type} />
             ))}
           </section>
 
           <section className="games-detail-section">
             <div className="games-cards-heading">
               <h4>Cards <span className="muted">({details.cards.length})</span></h4>
-              <button type="button" className="secondary-btn small" onClick={() => setCardEditor({ card: null })} disabled={loading || Boolean(loadErrors.cards)}>
-                <Plus size={15} /> Add Card
-              </button>
               {details.cards.length > CARD_PAGE_SIZE && <div className="games-pagination"><button type="button" className="icon-btn" onClick={() => setCardPage((page) => Math.max(0, page - 1))} disabled={cardPage === 0} aria-label="Previous cards"><ChevronLeft size={18} /></button><span>{cardPage + 1} / {cardPageCount}</span><button type="button" className="icon-btn" onClick={() => setCardPage((page) => Math.min(cardPageCount - 1, page + 1))} disabled={cardPage >= cardPageCount - 1} aria-label="Next cards"><ChevronRight size={18} /></button></div>}
             </div>
             {loadErrors.cards ? <div className="error-box">{loadErrors.cards}</div> : loading ? <p className="field-hint">Loading cards...</p> : details.cards.length === 0 ? <p className="field-hint">No cards have been added for this game.</p> : visibleCards.map((card) => (
               <details className="games-card-entry" key={card.id}>
                 <summary>Card {card.sort_order}</summary>
-                <div className="games-card-fields">
-                  <div><span className="muted">Front</span><p>{card.front_text || "—"}</p></div>
-                  <div><span className="muted">Back</span><p>{card.back_text || "—"}</p></div>
-                  <details><summary>Structured metadata (read-only)</summary><pre>{formatMetadata(card.metadata)}</pre></details>
-                  <div className="games-section-actions">
-                    <button type="button" className="secondary-btn small" onClick={() => setCardEditor({ card })}>
-                      <Pencil size={14} /> Edit
-                    </button>
+                {LEGACY_METADATA_GAME_TYPES.has(game.game_type) ? (
+                  <div className="games-card-fields">
+                    <div>
+                      {card.front_text?.trim() ? <p>{card.front_text}</p> : null}
+                      {card.back_text?.trim() ? <p>{card.back_text}</p> : null}
+                    </div>
                   </div>
-                </div>
+                ) : (
+                  <div className="games-card-fields">
+                    <div><span className="muted">Front</span><p>{card.front_text || "—"}</p></div>
+                    <div><span className="muted">Back</span><p>{card.back_text || "—"}</p></div>
+                  </div>
+                )}
               </details>
             ))}
           </section>
@@ -1866,258 +2007,6 @@ function GameDetailsModal({ game, onClose, onSaved, showToast }) {
             {savingInfo ? "Saving..." : "Save Changes"}
           </button>
         </div>
-      </div>
-      {addRuleOpen && (
-        <AddGameRuleModal
-          onClose={() => setAddRuleOpen(false)}
-          onCreate={createRule}
-          showToast={showToast}
-        />
-      )}
-      {cardEditor && (
-        <GameCardEditor
-          game={game}
-          card={cardEditor.card}
-          onClose={() => setCardEditor(null)}
-          onSave={saveCard}
-          showToast={showToast}
-        />
-      )}
-    </div>
-  );
-}
-
-function GameCardEditor({ game, card, onClose, onSave, showToast }) {
-  const [form, setForm] = useState(() => getCardEditorForm(game, card));
-  const [errors, setErrors] = useState({});
-  const [saving, setSaving] = useState(false);
-  const fieldId = (field) => `game-card-${field.replace(/\./g, "-")}`;
-
-  function setField(field, value) {
-    setForm((current) => ({ ...current, [field]: value }));
-    setErrors((current) => {
-      if (!current[field]) return current;
-      const next = { ...current };
-      delete next[field];
-      return next;
-    });
-  }
-
-  function setArrayValue(field, index, value, key = null) {
-    setForm((current) => ({
-      ...current,
-      [field]: current[field].map((item, itemIndex) => itemIndex !== index
-        ? item
-        : key ? { ...item, [key]: value } : value)
-    }));
-    const errorKey = key ? `${field}.${index}.${key}` : `${field}.${index}`;
-    setErrors((current) => {
-      if (!current[errorKey] && !current[field]) return current;
-      const next = { ...current };
-      delete next[errorKey];
-      if (field === "entries" || field === "clues") delete next[field];
-      return next;
-    });
-  }
-
-  function addArrayValue(field, value) {
-    setForm((current) => ({ ...current, [field]: [...current[field], value] }));
-  }
-
-  function removeArrayValue(field, index) {
-    setForm((current) => ({
-      ...current,
-      [field]: current[field].filter((_, itemIndex) => itemIndex !== index)
-    }));
-    setErrors((current) => {
-      const next = { ...current };
-      delete next[field];
-      return next;
-    });
-  }
-
-  function input(label, field, value, multiline = false) {
-    const id = fieldId(field);
-    return (
-      <>
-        <label htmlFor={id}>{label}</label>
-        {multiline
-          ? <textarea id={id} rows={4} value={value} onChange={(event) => setField(field, event.target.value)} aria-invalid={Boolean(errors[field])} aria-describedby={errors[field] ? `${id}-error` : undefined} />
-          : <input id={id} value={value} onChange={(event) => setField(field, event.target.value)} aria-invalid={Boolean(errors[field])} aria-describedby={errors[field] ? `${id}-error` : undefined} />}
-        {errors[field] && <span className="field-error" id={`${id}-error`}>{errors[field]}</span>}
-      </>
-    );
-  }
-
-  function arrayInput(field, index, label, value, key = null, multiline = false) {
-    const errorKey = key ? `${field}.${index}.${key}` : `${field}.${index}`;
-    const id = fieldId(errorKey);
-    return (
-      <label className="game-card-field" htmlFor={id}>
-        {label}
-        {multiline
-          ? <textarea id={id} rows={3} value={value} onChange={(event) => setArrayValue(field, index, event.target.value, key)} aria-invalid={Boolean(errors[errorKey])} aria-describedby={errors[errorKey] ? `${id}-error` : undefined} />
-          : <input id={id} value={value} onChange={(event) => setArrayValue(field, index, event.target.value, key)} aria-invalid={Boolean(errors[errorKey])} aria-describedby={errors[errorKey] ? `${id}-error` : undefined} />}
-        {errors[errorKey] && <span className="field-error" id={`${id}-error`}>{errors[errorKey]}</span>}
-      </label>
-    );
-  }
-
-  async function submit(event) {
-    event.preventDefault();
-    const nextErrors = validateGameCardForm(game.game_type, form);
-    setErrors(nextErrors);
-    if (Object.keys(nextErrors).length > 0) return;
-
-    setSaving(true);
-    try {
-      const completed = await onSave(card, form);
-      if (completed) onClose();
-    } catch (saveError) {
-      showToast(saveError.message || "Unable to save the game card.", "error");
-    } finally {
-      setSaving(false);
-    }
-  }
-
-  function renderDynamicList(field, label, allowMultiline = false) {
-    return (
-      <div className="game-card-dynamic-list">
-        <div className="game-card-list-heading"><strong>{label}</strong><button type="button" className="secondary-btn small" onClick={() => addArrayValue(field, "")} disabled={saving}>Add entry</button></div>
-        {form[field].map((value, index) => (
-          <div className="game-card-dynamic-row" key={`${field}-${index}`}>
-            {arrayInput(field, index, `${label} ${index + 1}`, value, null, allowMultiline)}
-            {form[field].length > 1 && <button type="button" className="secondary-btn small" onClick={() => removeArrayValue(field, index)} disabled={saving} aria-label={`Remove ${label.toLowerCase()} ${index + 1}`}>Remove</button>}
-          </div>
-        ))}
-        {errors[field] && <span className="field-error">{errors[field]}</span>}
-      </div>
-    );
-  }
-
-  function renderFields() {
-    switch (game.game_type) {
-      case "bible_action":
-        return form.pairs.map((pair, index) => (
-          <div className="game-card-pair-fields" key={`pair-${index}`}>
-            <strong>Pair {index + 1}</strong>
-            {arrayInput("pairs", index, index === 0 ? "Target/action text (Left)" : "Left", pair.left, "left", true)}
-            {arrayInput("pairs", index, index === 0 ? "Reference content (Right)" : "Right", pair.right, "right", true)}
-          </div>
-        ));
-      case "bible_draw":
-        return <>{input("Prompt/list label", "prompt", form.prompt, true)}{form.items.map((item, index) => arrayInput("items", index, `Drawing item ${index + 1}`, item, null, true))}</>;
-      case "bible_groups":
-        return <>{input("List/category heading", "heading", form.heading)}{renderDynamicList("entries", "List entry", true)}</>;
-      case "bible_proverbs":
-        return form.verses.map((verse, index) => (
-          <div className="game-card-pair-fields" key={`verse-${index}`}>
-            <strong>Verse {index + 1}</strong>
-            {arrayInput("verses", index, "Verse text", verse.text, "text", true)}
-            {arrayInput("verses", index, "Reference (optional)", verse.reference, "reference")}
-            {arrayInput("verses", index, "Right text (optional)", verse.right, "right")}
-            {arrayInput("verses", index, "Underlined/missing words (one per line)", verse.underlined, "underlined", true)}
-          </div>
-        ));
-      case "bible_question":
-        return <>{input("Category", "category", form.category)}{form.entries.map((entry, index) => arrayInput("entries", index, `Question/list entry ${index + 1}`, entry, null, true))}</>;
-      case "bible_talk":
-        return <>{input("Target word/topic", "target", form.target)}{renderDynamicList("clues", "Prohibited clue")}</>;
-      case "inspirational_talk_1":
-        return <>{input("Quote", "quote", form.quote, true)}{input("Author", "author", form.author)}{input("Question", "question", form.question, true)}</>;
-      case "inspirational_talk_2":
-        return <>{input("Quote", "quote", form.quote, true)}{input("Question", "question", form.question, true)}</>;
-      default:
-        return <span className="field-error">This game type does not support card editing.</span>;
-    }
-  }
-
-  return (
-    <div className="modal-backdrop games-detail-backdrop">
-      <div className="modal user-modal game-card-editor-modal" role="dialog" aria-modal="true" aria-labelledby="game-card-editor-title">
-        <div className="modal-header">
-          <div>
-            <h3 id="game-card-editor-title">{card ? "Edit Card" : "Add Card"}</h3>
-            <p className="muted">{game.title} · {game.game_type}</p>
-          </div>
-          <button type="button" className="icon-btn" onClick={onClose} disabled={saving} aria-label="Close card editor"><X size={20} /></button>
-        </div>
-        <form onSubmit={submit} noValidate>
-          <div className="modal-body game-card-editor-body">
-            {errors.form && <div className="error-box">{errors.form}</div>}
-            {renderFields()}
-          </div>
-          <div className="modal-footer">
-            <button type="button" className="secondary-btn" onClick={onClose} disabled={saving}>Cancel</button>
-            <button type="submit" className="primary-btn" disabled={saving}>
-              {saving ? <><Loader2 size={17} className="spin" /> Saving...</> : card ? "Save Card" : "Add Card"}
-            </button>
-          </div>
-        </form>
-      </div>
-    </div>
-  );
-}
-
-function AddGameRuleModal({ onClose, onCreate, showToast }) {
-  const [ruleText, setRuleText] = useState("");
-  const [error, setError] = useState("");
-  const [saving, setSaving] = useState(false);
-
-  async function submit(event) {
-    event.preventDefault();
-    if (!ruleText.trim()) {
-      setError("Rule text is required.");
-      return;
-    }
-
-    setSaving(true);
-    setError("");
-    try {
-      const created = await onCreate(ruleText);
-      if (created) onClose();
-    } catch (createError) {
-      if (createError.message === "A rule already exists for this game.") {
-        setError(createError.message);
-      } else {
-        showToast(createError.message || "Unable to create the game rule.", "error");
-      }
-    } finally {
-      setSaving(false);
-    }
-  }
-
-  return (
-    <div className="modal-backdrop games-detail-backdrop">
-      <div className="modal user-modal" role="dialog" aria-modal="true" aria-labelledby="add-game-rule-title">
-        <div className="modal-header">
-          <div><h3 id="add-game-rule-title">Add Rule</h3><p className="muted">Create the game’s first rule.</p></div>
-          <button type="button" className="icon-btn" onClick={onClose} disabled={saving} aria-label="Close Add Rule"><X size={20} /></button>
-        </div>
-        <form onSubmit={submit} noValidate>
-          <div className="modal-body">
-            <label htmlFor="new-game-rule-text">Rule Text</label>
-            <textarea
-              id="new-game-rule-text"
-              rows={8}
-              value={ruleText}
-              onChange={(event) => {
-                setRuleText(event.target.value);
-                if (error === "Rule text is required.") setError("");
-              }}
-              aria-invalid={Boolean(error)}
-              aria-describedby={error ? "new-game-rule-error" : undefined}
-              required
-            />
-            {error && <span className="field-error" id="new-game-rule-error">{error}</span>}
-          </div>
-          <div className="modal-footer">
-            <button type="button" className="secondary-btn" onClick={onClose} disabled={saving}>Cancel</button>
-            <button type="submit" className="primary-btn" disabled={saving}>
-              {saving ? <><Loader2 size={17} className="spin" /> Saving...</> : "Add Rule"}
-            </button>
-          </div>
-        </form>
       </div>
     </div>
   );

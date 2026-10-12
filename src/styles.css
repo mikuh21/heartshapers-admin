@@ -291,14 +291,18 @@ td { padding: 13px 17px; border-top: 1px solid #eef0f3; font-size: 13px; }
   border-radius: 8px;
   background: #fff;
 }
-.games-cover-frame img { display: block; width: 100%; height: 100%; object-fit: contain; object-position: center; background: #fff; }
+.games-cover-frame img { display: block; width: 100%; height: 100%; object-fit: contain; object-position: center; border-radius: inherit; background: #fff; }
 .games-cover-frame.is-placeholder { display: grid; place-items: center; color: #7c8693; background: #f7f8fa; }
 .games-name-cell .games-cover-frame {
   width: 88px;
-  height: 49.5px;
+  height: auto;
   box-sizing: border-box;
   flex: 0 0 88px;
+  overflow: hidden;
+  border-radius: 8px;
 }
+.games-name-cell .games-cover-frame.has-cover { aspect-ratio: 16 / 9; }
+.games-name-cell .games-cover-frame > img { display: block; width: 100%; height: 100%; object-fit: contain; object-position: center; border-radius: 8px; clip-path: inset(0 round 8px); background: #fff; }
 .games-name-cell strong, .games-name-cell span { display: block; }
 .games-name-cell span { margin-top: 3px; color: #8a93a3; font-size: 11px; }
 .games-cards-cell { text-align: center; vertical-align: middle; }
@@ -379,16 +383,16 @@ td { padding: 13px 17px; border-top: 1px solid #eef0f3; font-size: 13px; }
 .games-detail-section { display: grid; gap: 12px; min-width: 0; }
 .games-detail-section h4 { margin: 0; font-size: 16px; color: #344054; }
 .games-info-form { display: grid; grid-template-columns: minmax(0, 1fr); gap: 9px; }
-.games-info-form > label, .games-info-form > .games-access-field, .games-rule-entry > label { display: grid; gap: 6px; font-size: 13px; font-weight: 650; color: #4c5561; }
+.games-info-form > label, .games-info-form > .games-access-field { display: grid; gap: 6px; font-size: 13px; font-weight: 650; color: #4c5561; }
 .games-info-form > .pdf-game-field-label { display: block; margin-top: 3px; }
 .games-info-form > .games-access-field { grid-column: 1 / -1; }
 .games-field-label { color: #4c5561; font-size: 13px; font-weight: 650; }
-.games-info-form input, .games-info-form textarea, .games-info-form select, .games-rule-entry textarea {
+.games-info-form input, .games-info-form textarea, .games-info-form select {
   width: 100%; border: 1px solid #dfe3ea; border-radius: 8px; padding: 10px 11px;
   outline: 0; background: white; color: #333; font: inherit; font-size: 13px;
 }
-.games-info-form textarea, .games-rule-entry textarea { resize: vertical; }
-.games-info-form input:focus, .games-info-form textarea:focus, .games-info-form select:focus, .games-rule-entry textarea:focus { border-color: #89929e; }
+.games-info-form textarea { resize: vertical; }
+.games-info-form input:focus, .games-info-form textarea:focus, .games-info-form select:focus { border-color: #89929e; }
 .games-info-form .switch-row input { width: 17px; height: 17px; padding: 0; }
 .games-info-form .games-access-box { width: 100%; box-sizing: border-box; align-items: center; }
 .games-info-form .games-access-description { flex: 1 1 auto; min-width: 0; }
@@ -407,6 +411,14 @@ td { padding: 13px 17px; border-top: 1px solid #eef0f3; font-size: 13px; }
 .games-placement-list { display: flex; flex-wrap: wrap; gap: 8px; padding: 0; margin: 0; list-style: none; }
 .games-placement-list li { padding: 8px 10px; border: 1px solid #e7e9ef; border-radius: 8px; color: #46505c; font-size: 13px; }
 .games-rule-entry { display: grid; gap: 10px; padding: 14px; border: 1px solid #e7e9ef; border-radius: 9px; }
+.games-rule-entry > strong { color: #46505c; font-size: 13px; }
+.games-rule-entry h5, .games-rule-entry h6, .games-rule-subheading { margin: 0; color: #475467; font-size: 13px; line-height: 1.55; }
+.games-rule-content { display: grid; gap: 10px; color: #475467; font-size: 13px; line-height: 1.55; overflow-wrap: anywhere; }
+.games-rule-group { display: grid; gap: 6px; min-width: 0; }
+.games-rule-content p { margin: 0; white-space: pre-wrap; }
+.games-rule-content ol, .games-rule-content ul { display: grid; gap: 6px; margin: 0; padding-left: 24px; }
+.games-rule-content li, .games-rule-paragraph { white-space: pre-wrap; }
+.games-rule-content li > ul { margin-top: 6px; }
 .games-rule-entry details, .games-card-fields details { min-width: 0; }
 .games-rule-entry summary, .games-card-fields summary { cursor: pointer; color: #46505c; font-size: 12px; font-weight: 600; }
 .games-rule-entry pre, .games-card-fields pre {
