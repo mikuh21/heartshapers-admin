@@ -31,12 +31,10 @@ npm install
 ```env
 VITE_SUPABASE_URL=...
 VITE_SUPABASE_ANON_KEY=...
-VITE_BOOK_COVERS_BUCKET=book-covers
-VITE_BOOK_PDFS_BUCKET=book-pdfs
 ```
 
 4. Create a Supabase Auth user for the administrator.
-5. Create two Supabase Storage buckets named `book-covers` and `book-pdfs` (or change the names in `.env`).
+5. Use the existing Supabase Storage buckets named `covers` and `pdfs`; the Admin app targets those buckets directly.
 6. Configure Storage policies and `books` table RLS so the authenticated admin can read/insert/update/delete rows and upload files.
 7. Run:
 

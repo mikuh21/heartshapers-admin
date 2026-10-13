@@ -1566,14 +1566,23 @@ function BookModal({ book, onClose, onSaved }) {
 
     const safeName = file.name.toLowerCase().replace(/[^a-z0-9._-]/g, "-");
     const path = `${folder}/${crypto.randomUUID()}-${safeName}`;
+    const storage = supabase.storage.from(bucket);
 
-    const { error } = await supabase.storage.from(bucket).upload(path, file, {
+    const { error } = await storage.upload(path, file, {
       upsert: false
     });
 
-    if (error) throw error;
-
     const isCover = folder === "covers";
+    if (error) {
+      const fileLabel = isCover ? "book cover" : "book PDF";
+      if (/bucket not found/i.test(error.message || "")) {
+        throw new Error(
+          `The Supabase Storage bucket "${bucket}" was not found while uploading the ${fileLabel}. Verify the Admin app's deployed Storage configuration.`
+        );
+      }
+      throw new Error(`Unable to upload the ${fileLabel}: ${error.message || "Storage upload failed."}`);
+    }
+
     await logAdminAction({
       action: isCover ? "book_cover_uploaded" : "book_pdf_uploaded",
       targetType: "book",
@@ -1585,7 +1594,10 @@ function BookModal({ book, onClose, onSaved }) {
       }
     });
 
-    const { data } = supabase.storage.from(bucket).getPublicUrl(path);
+    const { data } = storage.getPublicUrl(path);
+    if (!data?.publicUrl) {
+      throw new Error(`The ${isCover ? "book cover" : "book PDF"} uploaded, but Supabase did not return a public URL.`);
+    }
     return data.publicUrl;
   }
 
