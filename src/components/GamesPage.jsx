@@ -1126,7 +1126,7 @@ function AddGameModal({
     description: typeof game?.description === "string" ? game.description : "",
     rules: "",
     price: String(game?.price ?? 0),
-    is_locked: Boolean(game?.is_locked)
+    is_locked: game ? Boolean(game.is_locked) : true
   }));
   const [step, setStep] = useState(1);
   const [gameId, setGameId] = useState(game?.id || "");

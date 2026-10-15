@@ -68,7 +68,7 @@ const EMPTY_BOOK = {
   description: "",
   keywords: "",
   price: 0,
-  is_locked: false
+  is_locked: true
 };
 
 const DEFAULT_PILLAR_OPTIONS = ["Family", "Work", "Ministry"];
