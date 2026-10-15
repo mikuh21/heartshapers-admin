@@ -2861,7 +2861,7 @@ function PaymentsPage({ canManagePayments }) {
 
       let notificationFailed = false;
       if (action === "verify") {
-        const { error: emailError } = await supabase.functions.invoke("send-payment-verification-email", {
+        const { error: emailError } = await supabase.functions.invoke("clever-function", {
           body: {
             user_id: selected.user_id,
             reference_number: selected.reference_number,
