@@ -256,8 +256,11 @@ td { padding: 13px 17px; border-top: 1px solid #eef0f3; font-size: 13px; }
 .status.pending { background: #fff8e6; color: #946200; }
 .status.rejected { background: #fff1f0; color: #b42318; }
 
-.payment-modal { max-width: 760px; display: flex; flex-direction: column; overflow: hidden; }
-.payment-modal .modal-body { flex: 1 1 auto; min-height: 0; overflow-y: auto; overscroll-behavior: contain; }
+.payment-modal { width: min(920px, calc(100vw - 48px)); max-width: 920px; max-height: calc(100vh - 40px); display: flex; flex-direction: column; overflow: hidden; }
+.payment-modal .modal-body { flex: 1 1 auto; min-width: 0; min-height: 0; overflow-x: hidden; overflow-y: auto; overscroll-behavior: contain; }
+.payment-modal .payment-items-table { width: 100%; max-width: 100%; overflow-x: hidden; }
+.payment-modal .payment-items-table table { width: 100%; table-layout: fixed; }
+.payment-modal .payment-items-table th, .payment-modal .payment-items-table td { overflow-wrap: anywhere; }
 .payment-modal > .modal-footer { flex: 0 0 auto; position: relative; z-index: 1; background: #fff; }
 .payment-reference-inline { display: flex; align-items: baseline; flex-wrap: wrap; gap: 6px 10px; }
 .payment-reference-inline strong { color: #27313f; font-size: 12px; }
@@ -878,7 +881,8 @@ td { padding: 13px 17px; border-top: 1px solid #eef0f3; font-size: 13px; }
 
 @media (max-width: 600px) {
   .modal-backdrop { padding: 12px; }
-  .payment-modal { max-height: calc(100vh - 24px); }
+  .payment-modal { width: min(100%, 920px); max-width: 920px; max-height: calc(100vh - 24px); }
+  .payment-modal .payment-items-table th, .payment-modal .payment-items-table td { padding: 10px 8px; }
   .payment-modal .modal-header, .payment-modal .modal-footer { padding-left: 16px; padding-right: 16px; }
   .payment-modal .modal-body { padding: 16px; }
   .payment-proof-viewport { height: min(320px, 40vh); min-height: 160px; }
