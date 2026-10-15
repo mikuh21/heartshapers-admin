@@ -2779,16 +2779,33 @@ function PaymentsPage({ canManagePayments }) {
     const requestSequence = ++loadSequence.current;
     setLoading(true);
     setError("");
-    const paymentQuery = category === "games"
-      ? supabase.from("game_payment_submissions").select("*, games(title, price)").order("created_at", { ascending: false })
-      : supabase.from("payment_submissions").select("*, books(title, price)").order("created_at", { ascending: false });
-    const [{ data, error: paymentError }, userRows] = await Promise.all([
-      paymentQuery,
+    const [bookResult, gameResult, userRows] = await Promise.all([
+      supabase.from("payment_submissions").select("*, books(title, price)").order("created_at", { ascending: false }),
+      supabase.from("game_payment_submissions").select("*, games(title, price)").order("created_at", { ascending: false }),
       listUsers().catch(() => [])
     ]);
     if (requestSequence !== loadSequence.current) return;
+    const paymentError = bookResult.error || gameResult.error;
     if (paymentError) setError(paymentError.message);
-    setPayments(data || []);
+    const rawRows = [
+      ...(bookResult.data || []).map((row) => ({ ...row, item_type: "book", item: row.books, book_id: row.book_id })),
+      ...(gameResult.data || []).map((row) => ({ ...row, item_type: "game", item: row.games, game_id: row.game_id }))
+    ];
+    const grouped = new Map();
+    for (const row of rawRows) {
+      const key = [row.user_id, row.reference_number, row.proof_image_url].join("|");
+      if (!grouped.has(key)) grouped.set(key, { ...row, id: key, original_ids: [], payment_items: [], amount: 0, statuses: [] });
+      const group = grouped.get(key);
+      group.original_ids.push({ id: row.id, type: row.item_type });
+      group.payment_items.push({ id: row.item_type === "book" ? row.book_id : row.game_id, type: row.item_type, title: row.item?.title || (row.item_type === "book" ? "Unknown book" : "Unknown game"), price: Number(row.amount ?? row.item?.price ?? 0) });
+      group.amount += Number(row.amount || 0);
+      group.statuses.push(row.status);
+      if (row.created_at < group.created_at) group.created_at = row.created_at;
+      if (row.status === "pending") group.status = "pending";
+      else if (!group.status || group.statuses.every((status) => status === row.status)) group.status = row.status;
+      else group.status = "mixed";
+    }
+    setPayments([...grouped.values()].map((group) => ({ ...group, amount: Math.round(group.amount * 100) / 100 })));
     setUsers(userRows);
     setSelected(null);
     setLoading(false);
@@ -2797,7 +2814,7 @@ function PaymentsPage({ canManagePayments }) {
   useEffect(() => { if (canManagePayments) loadPayments(paymentCategory); }, [canManagePayments, paymentCategory]);
 
   function getPaymentProduct(payment) {
-    return paymentCategory === "games" ? payment.games : payment.books;
+    return payment.item || (paymentCategory === "games" ? payment.games : payment.books);
   }
 
   async function openPayment(payment) {
@@ -2805,11 +2822,11 @@ function PaymentsPage({ canManagePayments }) {
     setNote(payment.admin_notes || "");
     setProofUrl("");
     await logAdminAction({
-      action: "payment_submission_viewed",
-      targetType: paymentCategory === "games" ? "game_payment_submission" : "payment_submission",
+      action: "cart_payment_transaction_viewed",
+      targetType: "payment_transaction",
       targetId: payment.id,
-      targetName: getPaymentProduct(payment)?.title || null,
-      details: { customer_id: payment.user_id, amount: payment.amount }
+      targetName: payment.payment_items?.map((item) => item.title).join(", ") || getPaymentProduct(payment)?.title || null,
+      details: { customer_id: payment.user_id, amount: payment.amount, item_count: payment.payment_items?.length || 1 }
     });
     const { data, error: signedUrlError } = await supabase.storage
       .from(PAYMENT_PROOF_BUCKET)
@@ -2820,7 +2837,7 @@ function PaymentsPage({ canManagePayments }) {
   const userById = new Map(users.map((user) => [user.id, user]));
   const filtered = payments.filter((payment) => {
     const user = userById.get(payment.user_id);
-    const haystack = `${user?.full_name || ""} ${user?.email || ""} ${getPaymentProduct(payment)?.title || ""} ${payment.reference_number}`.toLowerCase();
+    const haystack = `${user?.full_name || ""} ${user?.email || ""} ${(payment.payment_items || []).map((item) => item.title).join(" ")} ${payment.reference_number}`.toLowerCase();
     return (status === "all" || payment.status === status) && haystack.includes(search.toLowerCase());
   });
 
@@ -2828,14 +2845,15 @@ function PaymentsPage({ canManagePayments }) {
     if (!selected) return;
     setBusy(true);
     try {
-      const { data, error: reviewError } = await supabase.rpc(
-        paymentCategory === "games"
-          ? action === "verify" ? "verify_game_payment_submission" : "reject_game_payment_submission"
-          : action === "verify" ? "verify_payment_submission" : "reject_payment_submission",
-        { payment_id: selected.id, note: note.trim() || null }
-      );
+      const { data, error: reviewError } = await supabase.rpc("review_cart_payment", {
+        p_user_id: selected.user_id,
+        p_reference_number: selected.reference_number,
+        p_proof_image_url: selected.proof_image_url,
+        p_action: action,
+        p_note: note.trim() || null
+      });
       if (reviewError) throw reviewError;
-      setPayments((current) => current.map((payment) => payment.id === selected.id ? { ...payment, ...data } : payment));
+      setPayments((current) => current.map((payment) => payment.id === selected.id ? { ...payment, status: data?.status || (action === "verify" ? "verified" : "rejected") } : payment));
       setSelected(null);
       showToast(action === "verify" ? "Payment verified successfully." : "Payment rejected.", "success");
     } catch (reviewError) {
@@ -2861,19 +2879,19 @@ function PaymentsPage({ canManagePayments }) {
       </div>
       <div className="toolbar">
         <div className="search-box"><Search size={18} /><input value={search} onChange={(event) => setSearch(event.target.value)} placeholder="Search payments..." /></div>
-        <div className="select-box"><select value={paymentCategory} onChange={(event) => { setSelected(null); setPaymentCategory(event.target.value); }} aria-label="Filter payments by category"><option value="books">Books</option><option value="games">Games</option></select><ChevronDown size={16} /></div>
+        <div className="select-box"><select value={paymentCategory} onChange={(event) => { setSelected(null); setPaymentCategory(event.target.value); }} aria-label="Filter payments by category"><option value="books">All items (Books &amp; Games)</option><option value="games">Games</option></select><ChevronDown size={16} /></div>
         <div className="select-box"><select value={status} onChange={(event) => setStatus(event.target.value)}><option value="all">All statuses</option><option value="pending">Pending</option><option value="verified">Verified</option><option value="rejected">Rejected</option></select><ChevronDown size={16} /></div>
       </div>
       {error && <div className="error-box page-error">{error}</div>}
       <div className="table-card">
         {loading ? <div className="empty-state"><Loader2 className="spin" /> Loading payments...</div> : filtered.length === 0 ? <div className="empty-state"><Receipt size={34} /><strong>No {paymentCategory} payments found</strong><span>{status === "pending" ? "Pending submissions will appear here." : `No ${paymentCategory} submissions match the selected filters.`}</span></div> : (
-          <div className="table-wrap"><table><thead><tr><th>Customer</th><th>{paymentCategory === "games" ? "Game" : "Book"}</th><th>Amount</th><th>Reference</th><th>Status</th><th>Submitted</th></tr></thead><tbody>
-            {filtered.map((payment) => { const user = userById.get(payment.user_id); return <tr key={payment.id} onClick={() => openPayment(payment)} className="clickable-row"><td><strong>{user?.full_name || "Unknown customer"}</strong><div className="muted">{user?.email || payment.user_id}</div></td><td><span className="payment-product-title">{getPaymentProduct(payment)?.title || `Unknown ${paymentCategory.slice(0, -1)}`}</span></td><td>{formatCurrency(payment.amount)}</td><td>{payment.reference_number}</td><td><span className={`status ${payment.status}`}>{formatPaymentStatus(payment.status)}</span></td><td>{formatDate(payment.created_at)}</td></tr>; })}
+          <div className="table-wrap"><table><thead><tr><th>Customer</th><th>Items</th><th>Amount</th><th>Reference</th><th>Status</th><th>Submitted</th></tr></thead><tbody>
+            {filtered.map((payment) => { const user = userById.get(payment.user_id); return <tr key={payment.id} onClick={() => openPayment(payment)} className="clickable-row"><td><strong>{user?.full_name || "Unknown customer"}</strong><div className="muted">{user?.email || payment.user_id}</div></td><td><span className="payment-product-title">{(payment.payment_items || []).map((item) => item.title).join(", ") || getPaymentProduct(payment)?.title || "Unknown item"}</span><div className="muted">{payment.payment_items?.length || 1} item(s)</div></td><td>{formatCurrency(payment.amount)}</td><td>{payment.reference_number}</td><td><span className={`status ${payment.status}`}>{formatPaymentStatus(payment.status)}</span></td><td>{formatDate(payment.created_at)}</td></tr>; })}
           </tbody></table></div>
         )}
       </div>
       {selected && <div className="modal-backdrop"><div className="modal payment-modal"><div className="modal-header"><div><h3>Payment Review</h3><p className="muted">{formatPaymentStatus(selected.status)} submission</p></div><button className="icon-btn" onClick={() => setSelected(null)}><X size={20} /></button></div><div className="modal-body">
-        {(() => { const user = userById.get(selected.user_id); const product = getPaymentProduct(selected); return <><div className="detail-grid"><div><span className="muted">Customer</span><strong>{user?.full_name || "Unknown customer"}</strong><span>{user?.email || "—"}</span></div><div><span className="muted">{paymentCategory === "games" ? "Game" : "Book"}</span><strong>{product?.title || `Unknown ${paymentCategory.slice(0, -1)}`}</strong><span>{formatCurrency(product?.price)}</span></div><div><span className="muted">Amount paid</span><strong>{formatCurrency(selected.amount)}</strong><span>Ref: {selected.reference_number}</span></div><div><span className="muted">Submitted</span><strong>{formatDate(selected.created_at)}</strong><span className={`status submitted-status ${selected.status}`}>{formatPaymentStatus(selected.status)}</span></div></div><label>Payment proof</label>{proofUrl ? <PaymentProofViewer key={selected.id} src={proofUrl} /> : <div className="empty-state small-empty">Unable to load payment proof.</div>}{selected.status === "pending" && <><label>Admin note / rejection reason</label><textarea value={note} onChange={(event) => setNote(event.target.value)} rows={3} placeholder="Optional note for verification, required for rejection" /></>}{selected.admin_notes && selected.status !== "pending" && <p className="field-hint">Admin note: {selected.admin_notes}</p>}</>; })()}
+        {(() => { const user = userById.get(selected.user_id); return <><div className="detail-grid"><div><span className="muted">Customer</span><strong>{user?.full_name || "Unknown customer"}</strong><span>{user?.email || "—"}</span></div><div><span className="muted">Items purchased</span><strong>{selected.payment_items?.length || 1} item(s)</strong><span>Books and games</span></div><div><span className="muted">Amount paid</span><strong>{formatCurrency(selected.amount)}</strong><span>Ref: {selected.reference_number}</span></div><div><span className="muted">Submitted</span><strong>{formatDate(selected.created_at)}</strong><span className={`status submitted-status ${selected.status}`}>{formatPaymentStatus(selected.status)}</span></div></div><label>Purchased items</label><div className="table-wrap"><table><thead><tr><th>Type</th><th>Item</th><th>Price</th></tr></thead><tbody>{(selected.payment_items || []).map((item, index) => <tr key={`${item.type}:${item.id}:${index}`}><td>{item.type === "game" ? "Game" : "Book"}</td><td>{item.title}</td><td>{formatCurrency(item.price)}</td></tr>)}</tbody><tfoot><tr><th colSpan={2}>Total</th><th>{formatCurrency(selected.amount)}</th></tr></tfoot></table></div><label>Payment proof</label>{proofUrl ? <PaymentProofViewer key={selected.id} src={proofUrl} /> : <div className="empty-state small-empty">Unable to load payment proof.</div>}{selected.status === "pending" && <><label>Admin note / rejection reason</label><textarea value={note} onChange={(event) => setNote(event.target.value)} rows={3} placeholder="Optional note for verification, required for rejection" /></>}{selected.admin_notes && selected.status !== "pending" && <p className="field-hint">Admin note: {selected.admin_notes}</p>}</>; })()}
       </div>{selected.status === "pending" && <div className="modal-footer"><button className="secondary-btn danger" onClick={() => { if (!note.trim()) { showToast("Add a rejection reason first.", "error"); return; } review("reject"); }} disabled={busy}>Reject Payment</button><button className="primary-btn" onClick={() => review("verify")} disabled={busy}>{busy ? "Saving..." : "Verify Payment"}</button></div>}</div></div>}
     </>
   );
