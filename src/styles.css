@@ -259,7 +259,9 @@ td { padding: 13px 17px; border-top: 1px solid #eef0f3; font-size: 13px; }
 .payment-modal { max-width: 760px; display: flex; flex-direction: column; overflow: hidden; }
 .payment-modal .modal-body { flex: 1 1 auto; min-height: 0; overflow-y: auto; overscroll-behavior: contain; }
 .payment-modal > .modal-footer { flex: 0 0 auto; position: relative; z-index: 1; background: #fff; }
-.payment-reference-value { margin-top: 3px; color: #27313f; font-size: 12px; font-weight: 600; overflow-wrap: anywhere; }
+.payment-reference-inline { display: flex; align-items: baseline; flex-wrap: wrap; gap: 6px 10px; }
+.payment-reference-inline strong { color: #27313f; font-size: 12px; }
+.payment-reference-value { color: #27313f; font-size: 12px; font-weight: 600; overflow-wrap: anywhere; }
 .payment-items-section { margin: 2px 0 8px; min-width: 0; }
 .payment-items-heading { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 10px; color: #374151; font-size: 13px; }
 .payment-items-heading span { color: #7b8494; font-weight: 500; }
