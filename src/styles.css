@@ -256,7 +256,7 @@ td { padding: 13px 17px; border-top: 1px solid #eef0f3; font-size: 13px; }
 .status.pending { background: #fff8e6; color: #946200; }
 .status.rejected { background: #fff1f0; color: #b42318; }
 
-.modal.payment-modal { width: calc(100vw - 32px); max-width: 1600px; max-height: calc(100vh - 16px); display: flex; flex-direction: column; overflow: hidden; }
+.modal.payment-modal { width: calc(100vw - 64px); max-width: 1500px; max-height: calc(100vh - 32px); display: flex; flex-direction: column; overflow: hidden; }
 .payment-modal .modal-body { flex: 1 1 auto; min-width: 0; min-height: 0; overflow-x: hidden; overflow-y: auto; overscroll-behavior: contain; }
 .payment-modal .payment-items-table { width: 100%; max-width: 100%; overflow-x: hidden; }
 .payment-modal .payment-items-table table { width: 100%; min-width: 0; table-layout: fixed; }
@@ -884,7 +884,7 @@ td { padding: 13px 17px; border-top: 1px solid #eef0f3; font-size: 13px; }
 
 @media (max-width: 600px) {
   .modal-backdrop { padding: 8px; }
-  .modal.payment-modal { width: calc(100vw - 16px); max-width: none; max-height: calc(100vh - 16px); }
+  .modal.payment-modal { width: calc(100vw - 24px); max-width: none; max-height: calc(100vh - 24px); }
   .payment-modal .payment-items-table th, .payment-modal .payment-items-table td { padding: 10px 8px; }
   .payment-modal .modal-header, .payment-modal .modal-footer { padding-left: 16px; padding-right: 16px; }
   .payment-modal .modal-body { padding: 16px; }
