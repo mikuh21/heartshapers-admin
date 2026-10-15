@@ -256,13 +256,13 @@ td { padding: 13px 17px; border-top: 1px solid #eef0f3; font-size: 13px; }
 .status.pending { background: #fff8e6; color: #946200; }
 .status.rejected { background: #fff1f0; color: #b42318; }
 
-.payment-modal { width: min(1400px, calc(100vw - 16px)); max-width: 1400px; max-height: calc(100vh - 16px); display: flex; flex-direction: column; overflow: hidden; }
+.modal.payment-modal { width: calc(100vw - 32px); max-width: 1600px; max-height: calc(100vh - 16px); display: flex; flex-direction: column; overflow: hidden; }
 .payment-modal .modal-body { flex: 1 1 auto; min-width: 0; min-height: 0; overflow-x: hidden; overflow-y: auto; overscroll-behavior: contain; }
 .payment-modal .payment-items-table { width: 100%; max-width: 100%; overflow-x: hidden; }
 .payment-modal .payment-items-table table { width: 100%; min-width: 0; table-layout: fixed; }
 .payment-modal .payment-items-table th:first-child, .payment-modal .payment-items-table td:first-child { width: 20%; }
-.payment-modal .payment-items-table th:nth-child(2), .payment-modal .payment-items-table td:nth-child(2) { width: 55%; }
-.payment-modal .payment-items-table th:last-child, .payment-modal .payment-items-table td:last-child { width: 25%; }
+.payment-modal .payment-items-table th:nth-child(2), .payment-modal .payment-items-table td:nth-child(2) { width: 65%; }
+.payment-modal .payment-items-table th:last-child, .payment-modal .payment-items-table td:last-child { width: 15%; }
 .payment-modal .payment-items-table th, .payment-modal .payment-items-table td { overflow-wrap: anywhere; }
 .payment-modal > .modal-footer { flex: 0 0 auto; position: relative; z-index: 1; background: #fff; }
 .payment-reference-inline { display: flex; align-items: baseline; flex-wrap: wrap; gap: 6px 10px; }
@@ -884,7 +884,7 @@ td { padding: 13px 17px; border-top: 1px solid #eef0f3; font-size: 13px; }
 
 @media (max-width: 600px) {
   .modal-backdrop { padding: 8px; }
-  .payment-modal { width: calc(100vw - 16px); max-width: none; max-height: calc(100vh - 16px); }
+  .modal.payment-modal { width: calc(100vw - 16px); max-width: none; max-height: calc(100vh - 16px); }
   .payment-modal .payment-items-table th, .payment-modal .payment-items-table td { padding: 10px 8px; }
   .payment-modal .modal-header, .payment-modal .modal-footer { padding-left: 16px; padding-right: 16px; }
   .payment-modal .modal-body { padding: 16px; }
