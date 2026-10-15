@@ -258,6 +258,20 @@ td { padding: 13px 17px; border-top: 1px solid #eef0f3; font-size: 13px; }
 
 .payment-modal { max-width: 760px; display: flex; flex-direction: column; overflow: hidden; }
 .payment-modal .modal-body { min-height: 0; overflow-y: auto; overscroll-behavior: contain; }
+.payment-items-section { margin: 2px 0 8px; min-width: 0; }
+.payment-items-heading { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 10px; color: #374151; font-size: 13px; }
+.payment-items-heading span { color: #7b8494; font-weight: 500; }
+.payment-items-table { border: 1px solid #e7eaf0; border-radius: 9px; background: #fff; }
+.payment-items-table table { width: 100%; border-collapse: collapse; }
+.payment-items-table th { background: #f8fafc; color: #667085; font-size: 11px; font-weight: 700; letter-spacing: .035em; text-transform: uppercase; }
+.payment-items-table th, .payment-items-table td { padding: 12px 14px; border-bottom: 1px solid #edf0f4; text-align: left; vertical-align: middle; }
+.payment-items-table tbody tr:last-child td { border-bottom: 1px solid #e7eaf0; }
+.payment-items-table .payment-item-price { text-align: right; white-space: nowrap; font-variant-numeric: tabular-nums; }
+.payment-items-table .payment-item-name { color: #27313f; font-weight: 600; }
+.payment-item-type { display: inline-flex; align-items: center; padding: 3px 8px; border-radius: 999px; background: #f0f2f5; color: #596273; font-size: 11px; font-weight: 650; }
+.payment-item-type.game { background: #edf5ff; color: #245ea8; }
+.payment-items-table tfoot th { background: #f8fafc; color: #27313f; font-size: 13px; text-transform: none; letter-spacing: 0; }
+.payment-items-table tfoot th:last-child { text-align: right; font-variant-numeric: tabular-nums; }
 .detail-grid { display: grid; grid-template-columns: repeat(2, 1fr); gap: 14px; margin-bottom: 20px; }
 .detail-grid > div { display: grid; gap: 4px; min-width: 0; padding: 13px; background: #fafbfc; border: 1px solid #eef0f3; border-radius: 8px; overflow-wrap: anywhere; }
 .detail-grid .submitted-status { justify-self: start; width: fit-content; }
