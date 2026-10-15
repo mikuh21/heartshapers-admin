@@ -2858,10 +2858,34 @@ function PaymentsPage({ canManagePayments }) {
         p_note: note.trim() || null
       });
       if (reviewError) throw reviewError;
+
+      let notificationFailed = false;
+      if (action === "verify") {
+        const { error: emailError } = await supabase.functions.invoke("send-payment-verification-email", {
+          body: {
+            user_id: selected.user_id,
+            reference_number: selected.reference_number,
+            proof_image_url: selected.proof_image_url
+          }
+        });
+        if (emailError) {
+          notificationFailed = true;
+          console.error("Payment was verified, but the admin email notification failed.", {
+            code: emailError.name || "PAYMENT_EMAIL_FAILED"
+          });
+        }
+      }
+
       setPayments((current) => current.map((payment) => payment.id === selected.id ? { ...payment, status: data?.status || (action === "verify" ? "verified" : "rejected") } : payment));
       setSelected(null);
       setShowVerifyConfirmation(false);
-      showToast(action === "verify" ? "Payment verified successfully." : "Payment rejected.", "success");
+      if (action === "verify") {
+        showToast(notificationFailed
+          ? "Payment verified and access granted, but the email notification could not be sent."
+          : "Payment verified successfully. Email notification sent.", notificationFailed ? "error" : "success");
+      } else {
+        showToast("Payment rejected.", "success");
+      }
     } catch (reviewError) {
       await logAdminAction({
         action: action === "verify" ? "payment_verification_failed" : "payment_rejection_failed",
