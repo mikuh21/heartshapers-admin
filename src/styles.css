@@ -921,3 +921,16 @@ td { padding: 13px 17px; border-top: 1px solid #eef0f3; font-size: 13px; }
   .setting-row { align-items: flex-start; flex-direction: column; }
   .detail-row { grid-template-columns: 1fr; }
 }
+
+/* Payment verification confirmation */
+.payment-confirm-backdrop { z-index: 60; }
+.modal.payment-confirm-modal { width: min(760px, calc(100vw - 32px)); max-width: 760px; max-height: calc(100vh - 48px); display: flex; flex-direction: column; overflow: hidden; }
+.payment-confirm-modal .modal-body { min-width: 0; min-height: 0; overflow-x: hidden; overflow-y: auto; }
+.payment-verification-disclaimer { margin-top: 18px; padding: 14px 16px; border: 1px solid #f0d9a8; border-radius: 9px; background: #fffaf0; color: #5b4a2b; font-size: 13px; line-height: 1.55; }
+.payment-verification-disclaimer > strong { display: block; margin-bottom: 6px; color: #8a5a00; }
+.payment-verification-disclaimer p { margin: 0 0 8px; }
+.payment-verification-disclaimer p:last-child { margin-bottom: 0; }
+.modal.payment-confirm-modal > .modal-footer { flex: 0 0 auto; }
+@media (max-width: 600px) {
+  .modal.payment-confirm-modal { width: calc(100vw - 24px); max-height: calc(100vh - 24px); }
+}
