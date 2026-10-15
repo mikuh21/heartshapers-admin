@@ -105,6 +105,9 @@ function normalizeUser(user: any) {
       user?.email_confirmed_at || user?.confirmed_at,
     ),
     disabled: Boolean(user?.banned_until),
+    membership_tier: String(user?.app_metadata?.membership_tier || "regular").trim().toLowerCase() === "vip"
+      ? "vip"
+      : "regular",
   };
 }
 
@@ -608,6 +611,10 @@ Deno.serve(async (req: Request): Promise<Response> => {
       const fullName = String(body?.full_name || "").trim();
       const email = String(body?.email || "").trim();
       const password = String(body?.password || "");
+      const requestedTier = String(body?.membership_tier || "regular").trim().toLowerCase();
+      if (requestedTier !== "regular" && requestedTier !== "vip") {
+        return jsonResponse({ error: "MEMBERSHIP_TIER_INVALID" }, 400);
+      }
 
       if (!fullName) {
         console.error("Create-user validation failed: FULL_NAME_REQUIRED");
@@ -633,7 +640,7 @@ Deno.serve(async (req: Request): Promise<Response> => {
       }
 
       let createdUser: any;
-      console.log("Creating normal user account for:", email);
+      console.log("Creating normal user account for:", email, "membership tier:", requestedTier);
       try {
         const { data, error } = await adminClient.auth.admin.createUser({
           email,
@@ -644,6 +651,7 @@ Deno.serve(async (req: Request): Promise<Response> => {
           },
           app_metadata: {
             role: "user",
+            membership_tier: requestedTier,
           },
         });
 
@@ -730,7 +738,7 @@ Deno.serve(async (req: Request): Promise<Response> => {
         targetType: "user",
         targetId: createdUser.id,
         targetName: fullName,
-        details: { user_email: email }
+        details: { user_email: email, membership_tier: requestedTier }
       });
       return jsonResponse({ user: normalizeUser(createdUser) }, 201);
     }
