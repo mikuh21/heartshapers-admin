@@ -73,7 +73,10 @@ function normalizeUser(rawUser = {}) {
         appMetadata.is_disabled ||
         userMetadata.disabled ||
         userMetadata.is_disabled
-    )
+    ),
+    membership_tier: String(appMetadata.membership_tier || rawUser.membership_tier || "regular").trim().toLowerCase() === "vip"
+      ? "vip"
+      : "regular"
   };
 }
 
@@ -230,7 +233,7 @@ function getCreateUserErrorMessage(code, status) {
       : "Unable to create the user account right now. Please try again.");
 }
 
-export async function createUser({ full_name, email, password }) {
+export async function createUser({ full_name, email, password, membership_tier = "regular" }) {
   let data;
   let error;
   try {
@@ -239,7 +242,8 @@ export async function createUser({ full_name, email, password }) {
         action: "create-user",
         full_name,
         email,
-        password
+        password,
+        membership_tier
       }
     }));
   } catch {
