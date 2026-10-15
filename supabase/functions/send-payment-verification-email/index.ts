@@ -160,7 +160,50 @@ Deno.serve(async (req: Request): Promise<Response> => {
         "",
         "Access has been granted for all verified items in this transaction."
       ].join("\n"),
-      html: `<div style="font-family:Arial,sans-serif;color:#222;max-width:680px;margin:auto"><h2 style="color:#ff3131">Heartshapers Payment Verified</h2><p>The transaction has been verified and access has been granted to all listed items.</p><table style="border-collapse:collapse;width:100%;margin:20px 0"><tbody><tr><th style="padding:8px;text-align:left;width:180px">Reviewed by</th><td style="padding:8px">${escapeHtml(admin.email)}</td></tr><tr><th style="padding:8px;text-align:left">Customer</th><td style="padding:8px">${escapeHtml(customerName)}</td></tr><tr><th style="padding:8px;text-align:left">Customer email</th><td style="padding:8px">${escapeHtml(customer.email || "Not available")}</td></tr><tr><th style="padding:8px;text-align:left">Reference number</th><td style="padding:8px">${escapeHtml(referenceNumber)}</td></tr><tr><th style="padding:8px;text-align:left">Verified on</th><td style="padding:8px">${escapeHtml(dateLabel)} (Philippine Time)</td></tr></tbody></table><h3>Approved items</h3><table style="border-collapse:collapse;width:100%"><thead><tr><th style="padding:10px;text-align:left;background:#f6f6f6">Type</th><th style="padding:10px;text-align:left;background:#f6f6f6">Item</th><th style="padding:10px;text-align:right;background:#f6f6f6">Price</th></tr></thead><tbody>${itemRows}</tbody><tfoot><tr><th colspan="2" style="padding:12px;text-align:right">Total paid</th><th style="padding:12px;text-align:right">${escapeHtml(peso(total))}</th></tr></tfoot></table><p style="margin-top:24px;color:#555">This notification was sent automatically by Heartshapers Admin.</p></div>`
+      html: `<!doctype html>
+<html lang="en">
+<head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Payment verified | Heartshapers</title></head>
+<body style="margin:0;padding:0;background:#f4f5f7;font-family:Arial,Helvetica,sans-serif;color:#252525">
+  <div style="display:none;max-height:0;overflow:hidden;opacity:0">Payment verified successfully. ${items.length} item(s) approved for reference ${escapeHtml(referenceNumber)}.</div>
+  <table role="presentation" width="100%" cellspacing="0" cellpadding="0" border="0" style="background:#f4f5f7;padding:32px 12px">
+    <tr><td align="center">
+      <table role="presentation" width="100%" cellspacing="0" cellpadding="0" border="0" style="max-width:680px;background:#ffffff;border:1px solid #e7e7e7;border-radius:14px;overflow:hidden">
+        <tr><td style="background:#ff3131;padding:26px 32px">
+          <div style="font-size:12px;font-weight:bold;letter-spacing:2px;color:#ffe7e7;text-transform:uppercase">HEARTSHAPERS ADMIN</div>
+          <div style="font-size:26px;line-height:1.25;font-weight:bold;color:#ffffff;margin-top:10px">Payment verified</div>
+          <div style="font-size:14px;line-height:1.6;color:#fff0f0;margin-top:7px">The transaction has been approved and access has been granted.</div>
+        </td></tr>
+        <tr><td style="padding:28px 32px 12px">
+          <div style="display:inline-block;background:#e9f8ef;color:#187344;border:1px solid #c7ecd5;border-radius:20px;padding:7px 12px;font-size:12px;font-weight:bold">✓ VERIFIED SUCCESSFULLY</div>
+          <p style="font-size:15px;line-height:1.7;color:#555;margin:18px 0 22px">This is a confirmation that the payment review is complete. Keep this email for your transaction records.</p>
+          <div style="font-size:17px;font-weight:bold;margin:0 0 12px;color:#222">Transaction details</div>
+          <table role="presentation" width="100%" cellspacing="0" cellpadding="0" border="0" style="border:1px solid #e9e9e9;border-radius:9px;border-collapse:separate">
+            <tr><td style="padding:13px 15px;border-bottom:1px solid #eeeeee;color:#777;font-size:13px;width:36%">Reference number</td><td style="padding:13px 15px;border-bottom:1px solid #eeeeee;font-size:14px;font-weight:bold;color:#222;word-break:break-word">${escapeHtml(referenceNumber)}</td></tr>
+            <tr><td style="padding:13px 15px;border-bottom:1px solid #eeeeee;color:#777;font-size:13px">Customer</td><td style="padding:13px 15px;border-bottom:1px solid #eeeeee;font-size:14px;color:#222">${escapeHtml(customerName)}</td></tr>
+            <tr><td style="padding:13px 15px;border-bottom:1px solid #eeeeee;color:#777;font-size:13px">Customer email</td><td style="padding:13px 15px;border-bottom:1px solid #eeeeee;font-size:14px;color:#222;word-break:break-word">${escapeHtml(customer.email || "Not available")}</td></tr>
+            <tr><td style="padding:13px 15px;border-bottom:1px solid #eeeeee;color:#777;font-size:13px">Reviewed by</td><td style="padding:13px 15px;border-bottom:1px solid #eeeeee;font-size:14px;color:#222;word-break:break-word">${escapeHtml(admin.email)}</td></tr>
+            <tr><td style="padding:13px 15px;color:#777;font-size:13px">Verified on</td><td style="padding:13px 15px;font-size:14px;color:#222">${escapeHtml(dateLabel)} <span style="color:#777;font-size:12px">(Philippine Time)</span></td></tr>
+          </table>
+        </td></tr>
+        <tr><td style="padding:18px 32px 8px">
+          <div style="font-size:17px;font-weight:bold;color:#222;margin-bottom:12px">Approved items <span style="font-size:12px;font-weight:normal;color:#777">(${items.length})</span></div>
+          <table role="presentation" width="100%" cellspacing="0" cellpadding="0" border="0" style="border-collapse:collapse;width:100%">
+            <thead><tr style="background:#f7f7f8"><th align="left" style="padding:12px 10px;font-size:11px;letter-spacing:.5px;text-transform:uppercase;color:#666;border-bottom:1px solid #e8e8e8">Type</th><th align="left" style="padding:12px 10px;font-size:11px;letter-spacing:.5px;text-transform:uppercase;color:#666;border-bottom:1px solid #e8e8e8">Item</th><th align="right" style="padding:12px 10px;font-size:11px;letter-spacing:.5px;text-transform:uppercase;color:#666;border-bottom:1px solid #e8e8e8;white-space:nowrap">Price</th></tr></thead>
+            <tbody>${itemRows}</tbody>
+          </table>
+          <table role="presentation" width="100%" cellspacing="0" cellpadding="0" border="0" style="margin-top:14px;background:#fff5f4;border:1px solid #ffe0dd;border-radius:9px">
+            <tr><td style="padding:16px;color:#73312c;font-size:14px;font-weight:bold">TOTAL PAID</td><td align="right" style="padding:16px;color:#d92d20;font-size:22px;font-weight:bold;white-space:nowrap">${escapeHtml(peso(total))}</td></tr>
+          </table>
+        </td></tr>
+        <tr><td style="padding:28px 32px 30px">
+          <div style="border-top:1px solid #eeeeee;padding-top:18px;font-size:12px;line-height:1.7;color:#888">This is an automated notification from Heartshapers Admin.<br>Please do not reply directly to this email.</div>
+        </td></tr>
+      </table>
+      <div style="max-width:680px;padding:16px 8px 0;font-size:11px;line-height:1.6;text-align:center;color:#999">© Heartshapers · Payment verification record</div>
+    </td></tr>
+  </table>
+</body>
+</html>`
     });
 
     return jsonResponse({ success: true, recipient: admin.email, item_count: items.length });
