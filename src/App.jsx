@@ -2007,6 +2007,7 @@ function UsersPage({ canManageUsers }) {
                 <tr>
                   <th>User</th>
                   <th>Email</th>
+                  <th>Membership Tier</th>
                   <th>Account Status</th>
                   <th>Email Verification</th>
                   <th>Date Joined</th>
@@ -2025,6 +2026,11 @@ function UsersPage({ canManageUsers }) {
                       </div>
                     </td>
                     <td>{user.email || "—"}</td>
+                    <td>
+                      <span className={`status ${user.membership_tier === "vip" ? "verified" : "unverified"}`}>
+                        {user.membership_tier === "vip" ? "VIP" : "Regular"}
+                      </span>
+                    </td>
                     <td>
                       <span className={`status ${user.disabled ? "disabled" : "active"}`}>
                         {user.disabled ? <Lock size={13} /> : <Unlock size={13} />}
@@ -2106,7 +2112,8 @@ function CreateUserModal({ onClose, onCreated }) {
     full_name: "",
     email: "",
     password: "",
-    confirmPassword: ""
+    confirmPassword: "",
+    membership_tier: "regular"
   });
   const [fieldErrors, setFieldErrors] = useState({});
   const [busy, setBusy] = useState(false);
@@ -2147,7 +2154,8 @@ function CreateUserModal({ onClose, onCreated }) {
       await createUser({
         full_name: form.full_name.trim(),
         email: form.email.trim(),
-        password: form.password
+        password: form.password,
+        membership_tier: form.membership_tier
       });
       await onCreated();
     } catch (err) {
@@ -2179,6 +2187,15 @@ function CreateUserModal({ onClose, onCreated }) {
             <label>Email <span className="required-marker">*</span></label>
             <input type="email" value={form.email} onChange={(e) => updateField("email", e.target.value)} placeholder="name@gmail.com" />
             {fieldErrors.email && <div className="field-error">{fieldErrors.email}</div>}
+
+            <label>Membership Tier <span className="required-marker">*</span></label>
+            <select
+              value={form.membership_tier}
+              onChange={(e) => updateField("membership_tier", e.target.value)}
+            >
+              <option value="regular">Regular — standard access</option>
+              <option value="vip">VIP — free access to all books and games</option>
+            </select>
 
             <label>Password <span className="required-marker">*</span></label>
             <div className="password-field">
@@ -2241,6 +2258,10 @@ function UserDetailsModal({ user, onClose, onToggleStatus, toggling }) {
           <div className="detail-row">
             <div className="detail-label">Email</div>
             <div className="detail-value">{user.email || "—"}</div>
+          </div>
+          <div className="detail-row">
+            <div className="detail-label">Membership Tier</div>
+            <div className="detail-value">{user.membership_tier === "vip" ? "VIP" : "Regular"}</div>
           </div>
           <div className="detail-row">
             <div className="detail-label">Date Joined</div>
