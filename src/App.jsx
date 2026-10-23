@@ -638,7 +638,7 @@ function Login() {
     });
 
     if (error) {
-      setError(error?.message || "This book could not be deleted or is already deleted.");
+      setError(error.message);
       setBusy(false);
       return;
     }
