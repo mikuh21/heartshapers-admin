@@ -33,6 +33,38 @@ import {
 import { gameUploadSizeError, loadGameUploadLimit } from "../lib/uploadSettings";
 
 const CARD_PAGE_SIZE = 20;
+
+function ConfirmingForm({ children, onConfirm, ConfirmModal, title, message, actionLabel = "Save Changes", shouldConfirm = true, ...formProps }) {
+  const [open, setOpen] = useState(false);
+  const [submitting, setSubmitting] = useState(false);
+  async function confirm() {
+    if (submitting) return;
+    setSubmitting(true);
+    try {
+      await onConfirm({ preventDefault() {} });
+      setOpen(false);
+    } finally {
+      setSubmitting(false);
+    }
+  }
+  return (
+    <>
+      <form {...formProps} onSubmit={(event) => {
+        event.preventDefault();
+        if (!shouldConfirm) {
+          onConfirm(event);
+          return;
+        }
+        if (!submitting) setOpen(true);
+      }}>
+        {children}
+      </form>
+      {open && <ConfirmModal title={title} message={message} actionLabel={actionLabel} busyLabel="Saving..." tone="primary" icon={AlertTriangle} onClose={() => { if (!submitting) setOpen(false); }} onConfirm={confirm} />}
+    </>
+  );
+}
+
+
 const LEGACY_METADATA_GAME_TYPES = new Set([
   "bible_action",
   "bible_draw",
@@ -1482,7 +1514,7 @@ function AddGameModal({
           </div>
           <button type="button" className="icon-btn" onClick={onClose} disabled={saving} aria-label={`Close ${isEditing ? "Edit" : "Add"} Game`}><X size={20} /></button>
         </div>
-        <form className="pdf-game-form" onSubmit={submit} noValidate>
+        <ConfirmingForm ConfirmModal={ConfirmModal} onConfirm={submit} title={isEditing ? "Save Game Changes?" : "Add This Game?"} message={isEditing ? "Confirm saving the changes to this game." : "Confirm adding this game to the library."} actionLabel={isEditing ? "Save Changes" : "Add Game"} shouldConfirm={step !== 1} className="pdf-game-form" noValidate>
           <div className="modal-body pdf-game-modal-body">
             {step === 1 ? (
               <>
@@ -1897,7 +1929,7 @@ function GameDetailsModal({ game, gameUploadLimit, uploadLimitError, onClose, on
 
           <section className="games-detail-section">
             <h4>Game Information</h4>
-            <form id="game-information-form" className="games-info-form" onSubmit={saveInformation} noValidate>
+            <ConfirmingForm ConfirmModal={ConfirmModal} onConfirm={saveInformation} title="Save Game Information?" message="Confirm saving the changes to this game." actionLabel="Save Changes" id="game-information-form" className="games-info-form" noValidate>
               <label className="pdf-game-field-label" htmlFor="edit-game-title">Game Title <span className="required-marker">*</span></label>
               <input id="edit-game-title" value={form.title} onChange={(event) => updateInformationField("title", event.target.value)} aria-invalid={Boolean(informationErrors.title)} aria-describedby={informationErrors.title ? "edit-game-title-error" : undefined} required />
               {informationErrors.title && <span className="field-error" id="edit-game-title-error">{informationErrors.title}</span>}
@@ -1964,7 +1996,7 @@ function GameDetailsModal({ game, gameUploadLimit, uploadLimitError, onClose, on
                   </div>
                 </div>
               </div>
-            </form>
+            </ConfirmingForm>
           </section>
 
           <section className="games-detail-section">
