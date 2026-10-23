@@ -738,7 +738,7 @@ export default function GamesPage({ canManageGames, ConfirmModal, showToast }) {
         targetType: "game",
         targetId: deleteTarget.id,
         targetName: deleteTarget.title,
-        details: { removed_storage_assets: deletedGame.removedAssetCount }
+        details: { soft_deleted: true, removed_storage_assets: 0 }
       }).catch((auditError) => {
         console.error("Game deletion audit logging failed.", {
           gameId: deleteTarget.id,
@@ -752,7 +752,7 @@ export default function GamesPage({ canManageGames, ConfirmModal, showToast }) {
       setRefreshKey((current) => current + 1);
       showToast(
         auditSucceeded
-          ? `${deleteTarget.title} deleted successfully.`
+          ? `${deleteTarget.title} deleted successfully. Its database records and files were retained.`
           : `${deleteTarget.title} was deleted, but its audit log could not be saved.`,
         auditSucceeded ? "success" : "error"
       );
@@ -950,7 +950,7 @@ export default function GamesPage({ canManageGames, ConfirmModal, showToast }) {
         <ConfirmModal
           title="Delete Game?"
           message={`Are you sure you want to delete "${deleteTarget.title || "Untitled"}"?`}
-          secondaryMessage="This removes the game's storage assets and its associated rules, cards, placements, and per-user access settings. Games with payment or purchase history cannot be deleted so financial records are preserved."
+          secondaryMessage="This hides the game from the admin and mobile apps while retaining its database record, cards, rules, placements, access settings, payment/purchase history, and uploaded files."
           actionLabel="Delete"
           busyLabel="Deleting..."
           tone="danger"
