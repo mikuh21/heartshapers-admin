@@ -346,6 +346,7 @@ Deno.serve(async (req: Request): Promise<Response> => {
         .from("books")
         .select("id, title, is_locked")
         .eq("id", bookId)
+        .is("deleted_at", null)
         .maybeSingle();
       if (bookError) {
         logBookAccessFailure("read selected book", "books", bookError);
@@ -392,7 +393,7 @@ Deno.serve(async (req: Request): Promise<Response> => {
 
       const [{ data: targetData, error: targetError }, { data: book, error: bookError }] = await Promise.all([
         adminClient.auth.admin.getUserById(userId),
-        adminClient.from("books").select("id, title").eq("id", bookId).maybeSingle()
+        adminClient.from("books").select("id, title").eq("id", bookId).is("deleted_at", null).maybeSingle()
       ]);
       const targetUser = targetData?.user;
       const targetRole = getRole(targetUser) || "user";
@@ -463,6 +464,7 @@ Deno.serve(async (req: Request): Promise<Response> => {
         .from("games")
         .select("id,title,is_locked")
         .eq("id", gameId)
+        .is("deleted_at", null)
         .maybeSingle();
       if (gameError) {
         logGameAccessFailure("read selected game", "games", gameError);
@@ -509,7 +511,7 @@ Deno.serve(async (req: Request): Promise<Response> => {
 
       const [{ data: targetData, error: targetError }, { data: game, error: gameError }] = await Promise.all([
         adminClient.auth.admin.getUserById(userId),
-        adminClient.from("games").select("id, title").eq("id", gameId).maybeSingle()
+        adminClient.from("games").select("id, title").eq("id", gameId).is("deleted_at", null).maybeSingle()
       ]);
       const targetUser = targetData?.user;
       const targetRole = getRole(targetUser) || "user";
