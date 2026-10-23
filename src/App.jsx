@@ -745,6 +745,62 @@ function AdminAccessDenied() {
   );
 }
 
+
+function ConfirmingForm({ children, onConfirm, title = "Confirm Save", message = "Are you sure you want to save these changes?", actionLabel = "Save Changes", ...formProps }) {
+  const [confirmationOpen, setConfirmationOpen] = useState(false);
+  const [confirming, setConfirming] = useState(false);
+  async function confirmSave() {
+    if (confirming) return;
+    setConfirming(true);
+    try {
+      await onConfirm({ preventDefault() {} });
+      setConfirmationOpen(false);
+    } finally {
+      setConfirming(false);
+    }
+  }
+  return (
+    <>
+      <form {...formProps} onSubmit={(event) => { event.preventDefault(); if (!confirming) setConfirmationOpen(true); }}>
+        {children}
+      </form>
+      {confirmationOpen && (
+        <ConfirmModal
+          title={title}
+          message={message}
+          actionLabel={actionLabel}
+          busyLabel="Saving..."
+          tone="primary"
+          icon={Save}
+          onClose={() => { if (!confirming) setConfirmationOpen(false); }}
+          onConfirm={confirmSave}
+        />
+      )}
+    </>
+  );
+}
+
+function ConfirmingButton({ onConfirm, title = "Confirm Save", message = "Are you sure you want to save these changes?", actionLabel = "Save Changes", disabled, children, className = "primary-btn" }) {
+  const [confirmationOpen, setConfirmationOpen] = useState(false);
+  const [confirming, setConfirming] = useState(false);
+  async function confirmSave() {
+    if (confirming) return;
+    setConfirming(true);
+    try {
+      await onConfirm();
+      setConfirmationOpen(false);
+    } finally {
+      setConfirming(false);
+    }
+  }
+  return (
+    <>
+      <button type="button" className={className} disabled={disabled || confirming} onClick={() => setConfirmationOpen(true)}>{children}</button>
+      {confirmationOpen && <ConfirmModal title={title} message={message} actionLabel={actionLabel} busyLabel="Saving..." tone="primary" icon={Save} onClose={() => { if (!confirming) setConfirmationOpen(false); }} onConfirm={confirmSave} />}
+    </>
+  );
+}
+
 function AdminApp({ session }) {
   const [page, setPage] = useState("dashboard");
   const [mobileOpen, setMobileOpen] = useState(false);
@@ -1777,7 +1833,7 @@ function BookModal({ book, onClose, onSaved }) {
           <button className="icon-btn" onClick={onClose}><X size={20} /></button>
         </div>
 
-        <form onSubmit={saveBook}>
+        <ConfirmingForm onConfirm={saveBook} title={form.id ? "Save Book Changes?" : "Add This Book?"} message={form.id ? "Confirm saving the changes to this book." : "Confirm adding this book to the library."} actionLabel={form.id ? "Save Changes" : "Add Book"}>
           <div className="modal-body">
             {error && <div className="error-box">{error}</div>}
             {settingError && <div className="error-box">{settingError}</div>}
@@ -3460,7 +3516,7 @@ function SettingsPage() {
               <h5>Pillars</h5>
             </div>
 
-            <form onSubmit={savePillar} className="settings-form">
+            <ConfirmingForm onConfirm={savePillar} title={editingPillarId ? "Update Pillar?" : "Add Pillar?"} message="Confirm saving this pillar change." actionLabel={editingPillarId ? "Update Pillar" : "Add Pillar"} className="settings-form">
               <label>Pillar name</label>
               <input
                 value={pillarName}
@@ -3477,7 +3533,7 @@ function SettingsPage() {
                   </button>
                 )}
               </div>
-            </form>
+            </ConfirmingForm>
 
             {loading ? (
               <div className="empty-state small-empty">Loading pillars...</div>
@@ -3507,7 +3563,7 @@ function SettingsPage() {
               <h5>Categories / Subcategories</h5>
             </div>
 
-            <form onSubmit={saveCategory} className="settings-form">
+            <ConfirmingForm onConfirm={saveCategory} title={editingCategoryId ? "Update Category?" : "Add Category?"} message="Confirm saving this category change." actionLabel={editingCategoryId ? "Update Category" : "Add Category"} className="settings-form">
               <label>Pillar</label>
               <select value={categoryPillarId} onChange={(event) => setCategoryPillarId(event.target.value)}>
                 {pillars.map((pillar) => (
@@ -3532,7 +3588,7 @@ function SettingsPage() {
                   </button>
                 )}
               </div>
-            </form>
+            </ConfirmingForm>
 
             {selectedPillarData ? (
               selectedPillarData.categories.length === 0 ? (
@@ -3609,7 +3665,7 @@ function SettingsPage() {
           </div>
 
           <div className="settings-form-actions">
-            <button type="button" className="primary-btn" onClick={saveUploadSettings} disabled={uploadSettingsLoading}>
+            <ConfirmingButton onConfirm={saveUploadSettings} title="Save Upload Settings?" message="Confirm applying these upload limits and settings." actionLabel="Save Settings" disabled={uploadSettingsLoading}>
               Save Upload Settings
             </button>
           </div>
@@ -3653,7 +3709,7 @@ function SettingsPage() {
               </span>
             </div>
             {paymentQrPreview ? <img className="settings-qr-preview" src={paymentQrPreview} alt="Configured GCash QR" /> : <div className="field-hint">No QR code is configured yet.</div>}
-            <div className="settings-form-actions"><button type="button" className="primary-btn" onClick={savePaymentSettings} disabled={paymentSettingsLoading}>Save Payment Settings</button></div>
+            <div className="settings-form-actions"><ConfirmingButton onConfirm={savePaymentSettings} title="Save Payment Settings?" message="Confirm saving the payment settings." actionLabel="Save Settings" disabled={paymentSettingsLoading}>Save Payment Settings</ConfirmingButton></div>
           </div>
         </div>
       </div>
