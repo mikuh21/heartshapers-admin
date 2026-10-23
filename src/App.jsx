@@ -1390,8 +1390,10 @@ function BookUserAccessModal({ book, onClose }) {
       });
       setAccessOverrides((current) => new Map(current).set(user.id, savedStatus));
       showToastRef.current("User access updated successfully.", "success");
+      return true;
     } catch (error) {
       showToastRef.current(error.message || "Unable to update user access.", "error");
+      return false;
     } finally {
       setUpdatingUserIds((current) => {
         const next = new Set(current);
@@ -1497,9 +1499,9 @@ function BookUserAccessModal({ book, onClose }) {
           onClose={() => setPendingAccessChange(null)}
           onConfirm={async () => {
             const { user, nextStatus } = pendingAccessChange;
-            await changeUserBookStatus(user, nextStatus);
-            setPendingAccessChange(null);
-            return true;
+            const succeeded = await changeUserBookStatus(user, nextStatus);
+            if (succeeded) setPendingAccessChange(null);
+            return succeeded;
           }}
         />
       )}
