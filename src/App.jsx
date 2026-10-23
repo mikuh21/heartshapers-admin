@@ -771,7 +771,7 @@ function ConfirmingForm({ children, onConfirm, title = "Confirm Save", message =
           actionLabel={actionLabel}
           busyLabel="Saving..."
           tone="primary"
-          icon={Save}
+          icon={AlertTriangle}
           onClose={() => { if (!confirming) setConfirmationOpen(false); }}
           onConfirm={confirmSave}
         />
@@ -1936,7 +1936,7 @@ function BookModal({ book, onClose, onSaved }) {
               {busy ? <><Loader2 size={18} className="spin" /> Saving...</> : <><Upload size={18} /> {form.id ? "Save Changes" : "Add Book"}</>}
             </button>
           </div>
-        </form>
+        </ConfirmingForm>
       </div>
     </div>
   );
