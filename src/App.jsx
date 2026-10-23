@@ -364,6 +364,7 @@ async function loadManagedSettings() {
   const { data: pillarRows, error: pillarError } = await supabase
     .from("pillars")
     .select("id, name, created_at")
+    .is("deleted_at", null)
     .order("created_at", { ascending: true });
 
   if (pillarError) throw pillarError;
@@ -371,6 +372,7 @@ async function loadManagedSettings() {
   const { data: categoryRows, error: categoryError } = await supabase
     .from("categories")
     .select("id, pillar_id, name, created_at")
+    .is("deleted_at", null)
     .order("created_at", { ascending: true });
 
   if (categoryError) throw categoryError;
@@ -636,7 +638,7 @@ function Login() {
     });
 
     if (error) {
-      setError(error.message);
+      setError(error?.message || "This book could not be deleted or is already deleted.");
       setBusy(false);
       return;
     }
@@ -930,8 +932,8 @@ function Dashboard({ goBooks }) {
       { data, error },
       { count: gamesCount, error: gamesError }
     ] = await Promise.all([
-      supabase.from("books").select("id, pillar, is_locked"),
-      supabase.from("games").select("id", { count: "exact", head: true })
+      supabase.from("books").select("id, pillar, is_locked").is("deleted_at", null),
+      supabase.from("games").select("id", { count: "exact", head: true }).is("deleted_at", null)
     ]);
 
     if (!error) {
@@ -1008,6 +1010,7 @@ function Books() {
     const { data, error } = await supabase
       .from("books")
       .select("id,title,author,cover_image_url,pdf_url,pillar,subcategory,description,keywords,created_at,is_locked,price")
+      .is("deleted_at", null)
       .order("created_at", { ascending: false });
 
     if (error) setError(error.message);
@@ -1052,8 +1055,14 @@ function Books() {
   });
 
   async function deleteBook(book) {
-    const { error } = await supabase.from("books").delete().eq("id", book.id);
-    if (error) {
+    const { data, error } = await supabase
+      .from("books")
+      .update({ deleted_at: new Date().toISOString() })
+      .eq("id", book.id)
+      .is("deleted_at", null)
+      .select("id")
+      .maybeSingle();
+    if (error || !data) {
       await logAdminAction({
         action: "book_delete_failed",
         targetType: "book",
@@ -3324,53 +3333,42 @@ function SettingsPage() {
 
     try {
       if (target.type === "pillar") {
-        const { data: booksInUse, error: findBooksError } = await supabase
-          .from("books")
-          .select("id, pillar")
-          .eq("pillar", target.name);
-
-        if (findBooksError) throw findBooksError;
-        if ((booksInUse || []).length > 0) {
-          throw new Error(`Cannot delete "${target.name}" because it is currently in use by ${booksInUse.length} book${booksInUse.length === 1 ? "" : "s"}.`);
-        }
-
-        const { error } = await supabase
+        const deletedAt = new Date().toISOString();
+        const { error: categoriesError } = await supabase
           .from("categories")
-          .delete()
-          .eq("pillar_id", target.id);
+          .update({ deleted_at: deletedAt })
+          .eq("pillar_id", target.id)
+          .is("deleted_at", null);
 
-        if (error) throw error;
+        if (categoriesError) throw categoriesError;
 
-        const { error: pillarDeleteError } = await supabase
+        const { data: deletedPillar, error: pillarError } = await supabase
           .from("pillars")
-          .delete()
-          .eq("id", target.id);
+          .update({ deleted_at: deletedAt })
+          .eq("id", target.id)
+          .is("deleted_at", null)
+          .select("id")
+          .maybeSingle();
 
-        if (pillarDeleteError) throw pillarDeleteError;
+        if (pillarError) throw pillarError;
+        if (!deletedPillar) throw new Error("This pillar could not be found or is already deleted.");
 
         await logAdminAction({ action: "pillar_deleted", targetType: "pillar", targetId: target.id, targetName: target.name });
-        showToast("Pillar deleted successfully.", "success");
+        showToast("Pillar deleted successfully. Its records remain in the database.", "success");
       }
 
       if (target.type === "category") {
         const targetPillar = pillars.find((pillar) => pillar.id === target.pillar_id);
-        const { data: booksInUse, error: findBooksError } = await supabase
-          .from("books")
-          .select("id, pillar, subcategory")
-          .eq("pillar", targetPillar?.name || "")
-          .eq("subcategory", target.name);
-
-        if (findBooksError) throw findBooksError;
-        if ((booksInUse || []).length > 0) {
-          throw new Error(`Cannot delete "${target.name}" because it is currently in use by ${booksInUse.length} book${booksInUse.length === 1 ? "" : "s"}.`);
-        }
-
-        const { error } = await supabase
+        const { data: deletedCategory, error } = await supabase
           .from("categories")
-          .delete()
-          .eq("id", target.id);
+          .update({ deleted_at: new Date().toISOString() })
+          .eq("id", target.id)
+          .is("deleted_at", null)
+          .select("id")
+          .maybeSingle();
 
         if (error) throw error;
+        if (!deletedCategory) throw new Error("This category could not be found or is already deleted.");
 
         await logAdminAction({
           action: "category_deleted",
@@ -3379,7 +3377,7 @@ function SettingsPage() {
           targetName: target.name,
           details: { pillar_id: target.pillar_id, pillar_name: targetPillar?.name || "" }
         });
-        showToast("Category deleted successfully.", "success");
+        showToast("Category deleted successfully. Its record remains in the database.", "success");
       }
 
       setDeleteTarget(null);
