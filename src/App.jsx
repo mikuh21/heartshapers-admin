@@ -2241,7 +2241,7 @@ function CreateUserModal({ onClose, onCreated }) {
           <button className="icon-btn" onClick={onClose}><X size={20} /></button>
         </div>
 
-        <form onSubmit={submit}>
+        <ConfirmingForm onConfirm={submit} title="Create User Account?" message="Confirm creating this user account." actionLabel="Create User">
           <div className="modal-body">
             {fieldErrors.submit && <div className="error-box">{fieldErrors.submit}</div>}
 
@@ -2297,7 +2297,7 @@ function CreateUserModal({ onClose, onCreated }) {
               {busy ? <><Loader2 size={18} className="spin" /> Creating...</> : <><Plus size={18} /> Create User</>}
             </button>
           </div>
-        </form>
+        </ConfirmingForm>
       </div>
     </div>
   );
@@ -2580,7 +2580,7 @@ function CreateAdminModal({ onClose, onCreated }) {
           <button className="icon-btn" onClick={onClose}><X size={20} /></button>
         </div>
 
-        <form onSubmit={submit}>
+        <ConfirmingForm onConfirm={submit} title="Create Admin Account?" message="Confirm creating this administrator account." actionLabel="Create Admin">
           <div className="modal-body">
             {fieldErrors.submit && <div className="error-box">{fieldErrors.submit}</div>}
 
@@ -2627,7 +2627,7 @@ function CreateAdminModal({ onClose, onCreated }) {
               {busy ? <><Loader2 size={18} className="spin" /> Creating...</> : <><Plus size={18} /> Create Admin</>}
             </button>
           </div>
-        </form>
+        </ConfirmingForm>
       </div>
     </div>
   );
