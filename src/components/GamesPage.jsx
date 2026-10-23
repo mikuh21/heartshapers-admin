@@ -976,6 +976,7 @@ export default function GamesPage({ canManageGames, ConfirmModal, showToast }) {
           game={accessGame}
           onClose={() => setAccessGame(null)}
           showToast={showToast}
+          ConfirmModal={ConfirmModal}
         />
       )}
       {deleteTarget && (
@@ -994,7 +995,7 @@ export default function GamesPage({ canManageGames, ConfirmModal, showToast }) {
   );
 }
 
-function GameUserAccessModal({ game, onClose, showToast }) {
+function GameUserAccessModal({ game, onClose, showToast, ConfirmModal }) {
   const showToastRef = useRef(showToast);
   showToastRef.current = showToast;
   const [users, setUsers] = useState([]);
@@ -1004,6 +1005,7 @@ function GameUserAccessModal({ game, onClose, showToast }) {
   const [loadError, setLoadError] = useState(false);
   const [search, setSearch] = useState("");
   const [updatingUserIds, setUpdatingUserIds] = useState(() => new Set());
+  const [pendingAccessChange, setPendingAccessChange] = useState(null);
 
   useEffect(() => {
     let active = true;
@@ -1047,8 +1049,10 @@ function GameUserAccessModal({ game, onClose, showToast }) {
       });
       setAccessOverrides((current) => new Map(current).set(user.id, savedStatus));
       showToastRef.current("Game user access updated successfully.", "success");
+      return true;
     } catch (error) {
       showToastRef.current(error.message || "Unable to update game user access.", "error");
+      return false;
     } finally {
       setUpdatingUserIds((current) => {
         const next = new Set(current);
@@ -1120,7 +1124,7 @@ function GameUserAccessModal({ game, onClose, showToast }) {
                           className={`user-access-status-select status ${displayStatus.toLowerCase()}`}
                           value={isPaid ? "paid" : status}
                           disabled={isPaid || updatingUserIds.has(user.id)}
-                          onChange={(event) => changeUserAccess(user, event.target.value)}
+                          onChange={(event) => { if (event.target.value !== status) setPendingAccessChange({ user, nextStatus: event.target.value, previousStatus: displayStatus }); }}
                           aria-label={`Access status for ${user.full_name || user.email} for ${game.title}`}
                         >
                           <option value="locked">Locked</option>
@@ -1708,6 +1712,22 @@ function AddGameModal({
           </div>
         </ConfirmingForm>
       </div>
+      {pendingAccessChange && ConfirmModal && (
+        <ConfirmModal
+          title="Change Game Access?"
+          message={"Confirm changing " + (pendingAccessChange.user.full_name || pendingAccessChange.user.email || "this user") + "'s access for \"" + game.title + "\" from " + pendingAccessChange.previousStatus + " to " + (pendingAccessChange.nextStatus === "free" ? "Free" : "Locked") + "."}
+          actionLabel="Confirm Change"
+          busyLabel="Updating..."
+          tone="primary"
+          onClose={() => setPendingAccessChange(null)}
+          onConfirm={async () => {
+            const { user, nextStatus } = pendingAccessChange;
+            const succeeded = await changeUserAccess(user, nextStatus);
+            if (succeeded) setPendingAccessChange(null);
+            return succeeded;
+          }}
+        />
+      )}
     </div>
   );
 }

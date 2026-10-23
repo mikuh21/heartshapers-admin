@@ -1300,6 +1300,7 @@ function BookUserAccessModal({ book, onClose }) {
   const [search, setSearch] = useState("");
   const [statusFilter, setStatusFilter] = useState("All");
   const [updatingUserIds, setUpdatingUserIds] = useState(() => new Set());
+  const [pendingAccessChange, setPendingAccessChange] = useState(null);
   const [loading, setLoading] = useState(true);
   const [loadError, setLoadError] = useState(false);
   const accessRequestRef = useRef(null);
@@ -1389,8 +1390,10 @@ function BookUserAccessModal({ book, onClose }) {
       });
       setAccessOverrides((current) => new Map(current).set(user.id, savedStatus));
       showToastRef.current("User access updated successfully.", "success");
+      return true;
     } catch (error) {
       showToastRef.current(error.message || "Unable to update user access.", "error");
+      return false;
     } finally {
       setUpdatingUserIds((current) => {
         const next = new Set(current);
@@ -1470,7 +1473,7 @@ function BookUserAccessModal({ book, onClose }) {
                       className={`user-access-status-select status ${status.toLowerCase().replaceAll(" ", "-")}`}
                       value={status}
                       disabled={isPaid || updatingUserIds.has(user.id)}
-                      onChange={(event) => changeUserBookStatus(user, event.target.value)}
+                      onChange={(event) => { if (event.target.value !== status) setPendingAccessChange({ user, nextStatus: event.target.value, previousStatus: status }); }}
                       aria-label={`Access status for ${user.full_name || user.email} for ${accessBook?.title || book.title}`}
                     >
                       <option value="Locked">Locked</option>
@@ -1486,6 +1489,22 @@ function BookUserAccessModal({ book, onClose }) {
           )}
         </div>
       </div>
+      {pendingAccessChange && (
+        <ConfirmModal
+          title="Change Book Access?"
+          message={"Confirm changing " + (pendingAccessChange.user.full_name || pendingAccessChange.user.email || "this user") + "'s access for \"" + (accessBook?.title || book.title) + "\" from " + pendingAccessChange.previousStatus + " to " + pendingAccessChange.nextStatus + "."}
+          actionLabel="Confirm Change"
+          busyLabel="Updating..."
+          tone="primary"
+          onClose={() => setPendingAccessChange(null)}
+          onConfirm={async () => {
+            const { user, nextStatus } = pendingAccessChange;
+            const succeeded = await changeUserBookStatus(user, nextStatus);
+            if (succeeded) setPendingAccessChange(null);
+            return succeeded;
+          }}
+        />
+      )}
     </div>
   );
 }
