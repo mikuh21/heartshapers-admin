@@ -3333,51 +3333,44 @@ function SettingsPage() {
 
     try {
       if (target.type === "pillar") {
-        const deletedAt = new Date().toISOString();
-        const { error: categoriesError } = await supabase
-          .from("categories")
-          .update({ deleted_at: deletedAt })
-          .eq("pillar_id", target.id)
-          .is("deleted_at", null);
+        const { data: deleted, error } = await supabase.rpc("soft_delete_pillar", {
+          p_pillar_id: target.id,
+        });
 
-        if (categoriesError) throw categoriesError;
+        if (error) throw error;
+        if (!deleted) throw new Error("This pillar could not be found or is already deleted.");
 
-        const { data: deletedPillar, error: pillarError } = await supabase
-          .from("pillars")
-          .update({ deleted_at: deletedAt })
-          .eq("id", target.id)
-          .is("deleted_at", null)
-          .select("id")
-          .maybeSingle();
-
-        if (pillarError) throw pillarError;
-        if (!deletedPillar) throw new Error("This pillar could not be found or is already deleted.");
-
-        await logAdminAction({ action: "pillar_deleted", targetType: "pillar", targetId: target.id, targetName: target.name });
-        showToast("Pillar deleted successfully. Its records remain in the database.", "success");
+        await logAdminAction({
+          action: "pillar_deleted",
+          targetType: "pillar",
+          targetId: target.id,
+          targetName: target.name,
+          details: { cascade: "categories_and_books" },
+        });
+        showToast("Pillar and its related content were hidden. All records remain in the database.", "success");
       }
 
       if (target.type === "category") {
         const targetPillar = pillars.find((pillar) => pillar.id === target.pillar_id);
-        const { data: deletedCategory, error } = await supabase
-          .from("categories")
-          .update({ deleted_at: new Date().toISOString() })
-          .eq("id", target.id)
-          .is("deleted_at", null)
-          .select("id")
-          .maybeSingle();
+        const { data: deleted, error } = await supabase.rpc("soft_delete_category", {
+          p_category_id: target.id,
+        });
 
         if (error) throw error;
-        if (!deletedCategory) throw new Error("This category could not be found or is already deleted.");
+        if (!deleted) throw new Error("This category could not be found or is already deleted.");
 
         await logAdminAction({
           action: "category_deleted",
           targetType: "category",
           targetId: target.id,
           targetName: target.name,
-          details: { pillar_id: target.pillar_id, pillar_name: targetPillar?.name || "" }
+          details: {
+            pillar_id: target.pillar_id,
+            pillar_name: targetPillar?.name || "",
+            cascade: "books",
+          },
         });
-        showToast("Category deleted successfully. Its record remains in the database.", "success");
+        showToast("Category and its related books were hidden. All records remain in the database.", "success");
       }
 
       setDeleteTarget(null);
@@ -3395,7 +3388,6 @@ function SettingsPage() {
       return false;
     }
   }
-
   const selectedPillarData = pillars.find((pillar) => pillar.id === categoryPillarId) || null;
 
   return (
