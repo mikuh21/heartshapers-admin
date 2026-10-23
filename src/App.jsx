@@ -1068,9 +1068,9 @@ function Books() {
         targetType: "book",
         targetId: book.id,
         targetName: book.title || "Untitled",
-        details: { failure_code: error.code || "BOOK_DELETE_FAILED" }
+        details: { failure_code: error?.code || (!data ? "BOOK_NOT_FOUND_OR_ALREADY_DELETED" : "BOOK_DELETE_FAILED") }
       });
-      setError(error.message);
+      setError(error?.message || "This book could not be deleted or is already deleted.");
       return false;
     }
 
@@ -3699,8 +3699,8 @@ function SettingsPage() {
           title={deleteTarget.type === "pillar" ? "Delete Pillar?" : "Delete Category?"}
           message={`Are you sure you want to delete "${deleteTarget.name}"?`}
           secondaryMessage={deleteTarget.type === "pillar"
-            ? "This will not automatically remove any existing book records."
-            : "This will not automatically change any existing books that use this category."}
+            ? "The pillar and its categories will be hidden from both apps, but their records will remain in the database."
+            : "The category will be hidden from both apps, but its record and existing book references will remain in the database."}
           actionLabel="Delete"
           tone="danger"
           onClose={() => setDeleteTarget(null)}
