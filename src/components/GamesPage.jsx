@@ -1706,7 +1706,7 @@ function AddGameModal({
               </button>
             )}
           </div>
-        </form>
+        </ConfirmingForm>
       </div>
     </div>
   );
