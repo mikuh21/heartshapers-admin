@@ -1081,7 +1081,7 @@ function Books() {
       targetId: book.id,
       targetName: book.title || "Untitled"
     });
-    showToast("Book deleted successfully.", "error");
+    showToast("Book deleted successfully. Its database record and files were retained.", "success");
     return true;
   }
 
@@ -1223,7 +1223,7 @@ function Books() {
         <ConfirmModal
           title="Delete Book?"
           message={`Are you sure you want to delete "${bookToDelete.title || "Untitled"}"?`}
-          secondaryMessage="This action cannot be undone."
+          secondaryMessage="This hides the book from the admin and mobile apps while retaining its database record and uploaded files."
           actionLabel="Delete"
           onClose={() => setBookToDelete(null)}
           onConfirm={() => deleteBook(bookToDelete)}
