@@ -9,7 +9,7 @@ alter table public.categories add column if not exists deleted_at timestamptz;
 
 create index if not exists books_active_created_at_idx
   on public.books (created_at desc) where deleted_at is null;
-create index if not exists games_active_sort_order_idx
+create index if not exists games_not_deleted_sort_order_idx
   on public.games (sort_order) where deleted_at is null;
 create index if not exists pillars_active_name_idx
   on public.pillars (name) where deleted_at is null;
