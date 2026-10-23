@@ -1042,22 +1042,6 @@ function StatCard({ label, value, icon, loading }) {
         <span>{label}</span>
         <strong>{loading ? "—" : value}</strong>
       </div>
-      {pendingAccessChange && (
-        <ConfirmModal
-          title="Change Book Access?"
-          message={"Confirm changing " + (pendingAccessChange.user.full_name || pendingAccessChange.user.email || "this user") + "'s access for \"" + (accessBook?.title || book.title) + "\" from " + pendingAccessChange.previousStatus + " to " + pendingAccessChange.nextStatus + "."}
-          actionLabel="Confirm Change"
-          busyLabel="Updating..."
-          tone="primary"
-          onClose={() => setPendingAccessChange(null)}
-          onConfirm={async () => {
-            const { user, nextStatus } = pendingAccessChange;
-            await changeUserBookStatus(user, nextStatus);
-            setPendingAccessChange(null);
-            return true;
-          }}
-        />
-      )}
     </div>
   );
 }
@@ -1503,6 +1487,22 @@ function BookUserAccessModal({ book, onClose }) {
           )}
         </div>
       </div>
+      {pendingAccessChange && (
+        <ConfirmModal
+          title="Change Book Access?"
+          message={"Confirm changing " + (pendingAccessChange.user.full_name || pendingAccessChange.user.email || "this user") + "'s access for \"" + (accessBook?.title || book.title) + "\" from " + pendingAccessChange.previousStatus + " to " + pendingAccessChange.nextStatus + "."}
+          actionLabel="Confirm Change"
+          busyLabel="Updating..."
+          tone="primary"
+          onClose={() => setPendingAccessChange(null)}
+          onConfirm={async () => {
+            const { user, nextStatus } = pendingAccessChange;
+            await changeUserBookStatus(user, nextStatus);
+            setPendingAccessChange(null);
+            return true;
+          }}
+        />
+      )}
     </div>
   );
 }
