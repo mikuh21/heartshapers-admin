@@ -796,7 +796,7 @@ function ConfirmingButton({ onConfirm, title = "Confirm Save", message = "Are yo
   return (
     <>
       <button type="button" className={className} disabled={disabled || confirming} onClick={() => setConfirmationOpen(true)}>{children}</button>
-      {confirmationOpen && <ConfirmModal title={title} message={message} actionLabel={actionLabel} busyLabel="Saving..." tone="primary" icon={Save} onClose={() => { if (!confirming) setConfirmationOpen(false); }} onConfirm={confirmSave} />}
+      {confirmationOpen && <ConfirmModal title={title} message={message} actionLabel={actionLabel} busyLabel="Saving..." tone="primary" icon={AlertTriangle} onClose={() => { if (!confirming) setConfirmationOpen(false); }} onConfirm={confirmSave} />}
     </>
   );
 }
@@ -3667,7 +3667,7 @@ function SettingsPage() {
           <div className="settings-form-actions">
             <ConfirmingButton onConfirm={saveUploadSettings} title="Save Upload Settings?" message="Confirm applying these upload limits and settings." actionLabel="Save Settings" disabled={uploadSettingsLoading}>
               Save Upload Settings
-            </button>
+            </ConfirmingButton>
           </div>
         </div>
       </div>
