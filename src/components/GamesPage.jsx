@@ -1049,8 +1049,10 @@ function GameUserAccessModal({ game, onClose, showToast, ConfirmModal }) {
       });
       setAccessOverrides((current) => new Map(current).set(user.id, savedStatus));
       showToastRef.current("Game user access updated successfully.", "success");
+      return true;
     } catch (error) {
       showToastRef.current(error.message || "Unable to update game user access.", "error");
+      return false;
     } finally {
       setUpdatingUserIds((current) => {
         const next = new Set(current);
@@ -1720,9 +1722,9 @@ function AddGameModal({
           onClose={() => setPendingAccessChange(null)}
           onConfirm={async () => {
             const { user, nextStatus } = pendingAccessChange;
-            await changeUserAccess(user, nextStatus);
-            setPendingAccessChange(null);
-            return true;
+            const succeeded = await changeUserAccess(user, nextStatus);
+            if (succeeded) setPendingAccessChange(null);
+            return succeeded;
           }}
         />
       )}
