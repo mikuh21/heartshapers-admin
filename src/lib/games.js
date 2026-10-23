@@ -435,8 +435,9 @@ export async function listGamesWithCounts() {
     supabase
       .from("games")
       .select("id,title,subtitle,description,cover_image_url,source_pdf_path,game_type,is_locked,price,sort_order,created_at,updated_at")
+      .is("deleted_at", null)
       .order("sort_order", { ascending: true }),
-    supabase.from("pillars").select("id,name").order("name", { ascending: true }),
+    supabase.from("pillars").select("id,name").is("deleted_at", null).order("name", { ascending: true }),
     supabase.from("game_placements").select("game_id,pillar_id")
   ]);
 
@@ -548,8 +549,8 @@ export async function loadPlacementNames(placements) {
     { data: pillars, error: pillarsError },
     { data: categories, error: categoriesError }
   ] = await Promise.all([
-    supabase.from("pillars").select("id,name").in("id", pillarIds),
-    supabase.from("categories").select("id,name").in("id", categoryIds)
+    supabase.from("pillars").select("id,name").is("deleted_at", null).in("id", pillarIds),
+    supabase.from("categories").select("id,name").is("deleted_at", null).in("id", categoryIds)
   ]);
 
   if (pillarsError) throw pillarsError;
@@ -763,80 +764,26 @@ export async function deleteGame(gameId) {
     throw new Error("The selected game ID is invalid. No data was changed.");
   }
 
-  const { data: existingGame, error: lookupError } = await supabase
-    .from("games")
-    .select("id")
-    .eq("id", gameId)
-    .maybeSingle();
-  if (lookupError) {
-    throw new Error(`Unable to verify the selected game: ${describeGameDeletionError(lookupError)}. No data was changed.`);
-  }
-  if (!existingGame) {
-    throw new Error("This game could not be found or you do not have permission to delete it.");
-  }
-
-  await assertGameHasNoProtectedRecords(gameId);
-
-  const rootPath = `games/${gameId}`;
-  const storage = supabase.storage.from("game-assets");
-  let assetPaths;
-  try {
-    assetPaths = await listGameAssetPaths(storage, rootPath, rootPath);
-  } catch (error) {
-    console.error("Unable to safely enumerate game storage before deletion.", {
-      gameId,
-      message: error?.message || "Unknown error"
-    });
-    throw error;
-  }
-
-  let removedAssetCount = 0;
-  for (let index = 0; index < assetPaths.length; index += 1000) {
-    const batch = assetPaths.slice(index, index + 1000);
-    const { error } = await storage.remove(batch);
-    if (error) {
-      const detail = describeGameDeletionError(error);
-      console.error("Game storage cleanup failed.", {
-        gameId,
-        removedAssetCount,
-        failedBatchSize: batch.length,
-        code: error.code || "GAME_ASSET_DELETE_FAILED"
-      });
-      throw new Error(
-        removedAssetCount > 0
-          ? `Storage cleanup stopped after removing ${removedAssetCount} asset(s). The game record is still present; retry deletion to clean up the remaining files. Storage error: ${detail}`
-          : `Unable to remove this game's storage assets. The game record was not deleted. Storage error: ${detail}`
-      );
-    }
-    removedAssetCount += batch.length;
-  }
-
   const { data, error } = await supabase
     .from("games")
-    .delete()
+    .update({ deleted_at: new Date().toISOString() })
     .eq("id", gameId)
+    .is("deleted_at", null)
     .select("id")
     .maybeSingle();
 
   if (error) {
-    console.error("Game database deletion failed after storage cleanup.", {
+    console.error("Game soft deletion failed.", {
       gameId,
-      removedAssetCount,
-      code: error.code || "GAME_DELETE_FAILED"
+      code: error.code || "GAME_SOFT_DELETE_FAILED"
     });
-    throw new Error(
-      removedAssetCount > 0
-        ? `Removed ${removedAssetCount} storage asset(s), but the game and its database content could not be deleted: ${describeGameDeletionError(error)}. The game record remains; retry after resolving this database restriction.`
-        : `Unable to delete this game: ${describeGameDeletionError(error)}. The game record and its database content remain.`
-    );
+    throw new Error(`Unable to delete this game: ${describeGameDeletionError(error)}. No database records or storage assets were removed.`);
   }
   if (!data) {
-    throw new Error(
-      removedAssetCount > 0
-        ? `Removed ${removedAssetCount} storage asset(s), but the game record was not deleted. It may have been removed by another administrator. Refresh the Games list.`
-        : "This game could not be found or you do not have permission to delete it."
-    );
+    throw new Error("This game could not be found or has already been deleted.");
   }
 
-  return { ...data, removedAssetCount };
+  // Keep game cards, rules, placements, payment/purchase history, and storage
+  // assets intact. The deleted_at filter hides the game from normal listings.
+  return { ...data, removedAssetCount: 0 };
 }
