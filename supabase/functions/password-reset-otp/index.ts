@@ -124,7 +124,7 @@ Deno.serve(async (req: Request): Promise<Response> => {
         const transporter = nodemailer.createTransport({ host, port, secure: port === 465, auth: { user, pass: password }, requireTLS: port === 587 });
         await transporter.sendMail({
           from, to: email, subject: "Your Heartshapers password reset code",
-          text: ["Heartshapers password reset", "", `Your five-digit verification code is: ${code}`, "This code expires in 10 minutes.", "", "If you did not request a password reset, ignore this email.", "Do not share this code with anyone."].join("\\n"),
+          text: ["Heartshapers password reset", "", `Your five-digit verification code is: ${code}`, "This code expires in 10 minutes.", "", "If you did not request a password reset, ignore this email.", "Do not share this code with anyone."].join("\n"),
           html: emailHtml(code, email)
         });
       } catch (mailError) {
