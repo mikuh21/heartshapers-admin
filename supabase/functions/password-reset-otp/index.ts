@@ -136,7 +136,7 @@ Deno.serve(async (req: Request): Promise<Response> => {
     if (action === "verify-code") {
       const email = String(body?.email || "").trim().toLowerCase();
       const code = String(body?.code || "").trim();
-      if (!validEmail(email) || !/^\\d{5}$/.test(code)) return respond({ error: "That code is invalid or has expired." }, 400);
+      if (!validEmail(email) || !/^\d{5}$/.test(code)) return respond({ error: "That code is invalid or has expired." }, 400);
       const { data: record, error } = await db.from("password_reset_codes")
         .select("email,user_id,code_hash,expires_at,attempts,verified_at").eq("email", email).maybeSingle();
       if (error) {
