@@ -193,12 +193,17 @@ Deno.serve(async (req: Request): Promise<Response> => {
     }
 
     if (action === "resend-code") {
-      const { data: users, error: usersError } = await db.auth.admin.listUsers({ page: 1, perPage: 1000 });
-      if (usersError) {
-        console.error("Account lookup failed:", usersError.message);
-        return respond({ error: "Unable to process this request right now." }, 503);
+      let user: any = null;
+      for (let page = 1; page <= 50; page++) {
+        const { data, error: usersError } = await db.auth.admin.listUsers({ page, perPage: 1000 });
+        if (usersError) {
+          console.error("Account lookup failed:", usersError.message);
+          return respond({ error: "Unable to process this request right now." }, 503);
+        }
+        const users = data?.users || [];
+        user = users.find((u: any) => String(u.email || "").toLowerCase() === email) || null;
+        if (user || users.length < 1000) break;
       }
-      const user = (users?.users || []).find((u: any) => String(u.email || "").toLowerCase() === email);
       if (!user || user.email_confirmed_at) {
         return respond({ error: "This account cannot be verified with a new code. Please try logging in or sign up again." }, 400);
       }
