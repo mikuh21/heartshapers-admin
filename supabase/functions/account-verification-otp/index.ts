@@ -183,7 +183,13 @@ Deno.serve(async (req: Request): Promise<Response> => {
         console.error("Account creation failed:", createError?.message || "No user returned");
         return respond({ error: "We could not create your account. Please try again." }, 400);
       }
-      return await sendCode(created.user.id, fullName);
+      const sendResponse = await sendCode(created.user.id, fullName);
+      if (!sendResponse.ok) {
+        // Avoid leaving a stranded unverified account if the first email cannot be sent.
+        await db.from("account_verification_codes").delete().eq("email", email);
+        await db.auth.admin.deleteUser(created.user.id);
+      }
+      return sendResponse;
     }
 
     if (action === "resend-code") {
@@ -225,7 +231,7 @@ Deno.serve(async (req: Request): Promise<Response> => {
 
       const now = new Date().toISOString();
       const { data: claimed, error: claimError } = await db.from("account_verification_codes")
-        .update({ code_hash: null, verified_at: now, expires_at: null, updated_at: now })
+        .update({ code_hash: null, expires_at: null, updated_at: now })
         .eq("email", email).eq("code_hash", record.code_hash).is("verified_at", null)
         .select("user_id").maybeSingle();
       if (claimError || !claimed) return respond({ error: "That code is invalid or has already been used." }, 400);
@@ -233,7 +239,13 @@ Deno.serve(async (req: Request): Promise<Response> => {
       const { error: confirmError } = await db.auth.admin.updateUserById(claimed.user_id, { email_confirm: true });
       if (confirmError) {
         console.error("Could not confirm account email:", confirmError.message);
-        return respond({ error: "The code was accepted, but we could not activate your account. Please try again." }, 503);
+        return respond({ error: "The code could not activate your account. Please request a new code in a minute and try again." }, 503);
+      }
+      const { error: markVerifiedError } = await db.from("account_verification_codes")
+        .update({ verified_at: now, updated_at: now })
+        .eq("email", email).eq("user_id", claimed.user_id).is("verified_at", null);
+      if (markVerifiedError) {
+        console.error("Could not mark account verification record as complete:", markVerifiedError.message);
       }
       return respond({ ok: true });
     }
