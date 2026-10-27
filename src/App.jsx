@@ -75,7 +75,7 @@ const DEFAULT_PILLAR_OPTIONS = ["Family", "Work", "Ministry"];
 const DEFAULT_CATEGORY_OPTIONS = {
   Family: ["Devotionals", "Discipleship"],
   Work: ["Leadership"],
-  Ministry: ["Heroes of Faith", "Group Activities"]
+  Ministry: ["Heroes of Faith", "Group Dynamics"]
 };
 const PAYMENT_PROOF_BUCKET = "payment-proofs";
 const DEFAULT_PAYMENT_SETTINGS = {
