@@ -1192,11 +1192,6 @@ function Books() {
       showToast("No eligible book covers need optimization.", "info");
       return;
     }
-    const confirmed = window.confirm(
-      `Optimize ${candidates.length} existing book covers? This downloads the current images once (so egress may temporarily rise), uploads smaller WebP copies, and updates each book to use the optimized copy. Original files will be retained for rollback. Keep this page open until it finishes.`
-    );
-    if (!confirmed) return;
-
     setOptimizingCovers(true);
     setCoverOptimizationProgress({ done: 0, total: candidates.length });
     let optimizedCount = 0;
@@ -1303,10 +1298,17 @@ function Books() {
           <p className="muted">Manage the books stored in Heartshapers.</p>
         </div>
         <div className="heading-actions">
-          <button className="secondary-btn" onClick={optimizeExistingCovers} disabled={optimizingCovers || loading || !books.length}>
+          <ConfirmingButton
+            onConfirm={optimizeExistingCovers}
+            title="Optimize Existing Covers?"
+            message="This will download the current book covers once, so egress may temporarily rise. Smaller WebP copies will be uploaded and each book will be switched to its optimized copy. Original files will be retained for rollback. Keep this page open until it finishes."
+            actionLabel="Optimize Covers"
+            disabled={optimizingCovers || loading || !books.length}
+            className="secondary-btn"
+          >
             {optimizingCovers ? <Loader2 size={18} className="spin" /> : <ImageIcon size={18} />}
             {optimizingCovers ? `Optimizing ${coverOptimizationProgress.done}/${coverOptimizationProgress.total}` : "Optimize Existing Covers"}
-          </button>
+          </ConfirmingButton>
           <button className="primary-btn" onClick={() => { setSelected(null); setModal("book"); }}>
             <Plus size={18} /> Add Book
           </button>
