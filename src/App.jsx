@@ -98,6 +98,36 @@ async function optimizeBookCover(file) {
   }
 }
 
+async function optimizeExistingCoverUrl(url) {
+  if (!url || typeof createImageBitmap !== "function" || typeof document === "undefined") {
+    throw new Error("This browser does not support cover optimization.");
+  }
+  const response = await fetch(url);
+  if (!response.ok) throw new Error(`Unable to download cover (HTTP ${response.status}).`);
+  const sourceBlob = await response.blob();
+  if (!sourceBlob.type.startsWith("image/")) throw new Error("The cover URL did not return an image.");
+  let bitmap;
+  try {
+    bitmap = await createImageBitmap(sourceBlob);
+    const maxDimension = 1400;
+    const scale = Math.min(1, maxDimension / Math.max(bitmap.width, bitmap.height));
+    const canvas = document.createElement("canvas");
+    canvas.width = Math.max(1, Math.round(bitmap.width * scale));
+    canvas.height = Math.max(1, Math.round(bitmap.height * scale));
+    const context = canvas.getContext("2d");
+    if (!context) throw new Error("Unable to initialize the image optimizer.");
+    context.drawImage(bitmap, 0, 0, canvas.width, canvas.height);
+    const optimizedBlob = await new Promise((resolve) => canvas.toBlob(resolve, "image/webp", 0.78));
+    if (!optimizedBlob) throw new Error("The browser could not encode the optimized cover.");
+    if (optimizedBlob.size >= sourceBlob.size * 0.9) {
+      return { blob: null, originalBytes: sourceBlob.size, optimizedBytes: optimizedBlob.size };
+    }
+    return { blob: optimizedBlob, originalBytes: sourceBlob.size, optimizedBytes: optimizedBlob.size };
+  } finally {
+    bitmap?.close?.();
+  }
+}
+
 const EMPTY_BOOK = {
   id: null,
   title: "",
@@ -1099,6 +1129,8 @@ function Books() {
   const [selected, setSelected] = useState(null);
   const [accessBook, setAccessBook] = useState(null);
   const [bookToDelete, setBookToDelete] = useState(null);
+  const [optimizingCovers, setOptimizingCovers] = useState(false);
+  const [coverOptimizationProgress, setCoverOptimizationProgress] = useState({ done: 0, total: 0 });
 
   async function loadBooks() {
     setLoading(true);
@@ -1151,6 +1183,87 @@ function Books() {
     return text.includes(search.toLowerCase()) && matchesPillar && matchesSubcategory;
   });
 
+  async function optimizeExistingCovers() {
+    const candidates = books.filter((book) => {
+      const url = book.cover_image_url || "";
+      return url && !url.includes("/optimized/") && !url.toLowerCase().endsWith(".webp");
+    });
+    if (!candidates.length) {
+      showToast("No eligible book covers need optimization.", "info");
+      return;
+    }
+    const confirmed = window.confirm(
+      `Optimize ${candidates.length} existing book covers? This downloads the current images once (so egress may temporarily rise), uploads smaller WebP copies, and updates each book to use the optimized copy. Original files will be retained for rollback. Keep this page open until it finishes.`
+    );
+    if (!confirmed) return;
+
+    setOptimizingCovers(true);
+    setCoverOptimizationProgress({ done: 0, total: candidates.length });
+    let optimizedCount = 0;
+    let skippedCount = 0;
+    const failures = [];
+    try {
+      for (let index = 0; index < candidates.length; index += 1) {
+        const book = candidates[index];
+        let uploadedPath = null;
+        try {
+          const result = await optimizeExistingCoverUrl(book.cover_image_url);
+          if (!result.blob) {
+            skippedCount += 1;
+            continue;
+          }
+          uploadedPath = `optimized/${book.id}-${Date.now()}.webp`;
+          const { error: uploadError } = await supabase.storage.from(COVER_BUCKET).upload(uploadedPath, result.blob, {
+            contentType: "image/webp",
+            cacheControl: "31536000",
+            upsert: false
+          });
+          if (uploadError) throw uploadError;
+
+          const { data: publicUrlData } = supabase.storage.from(COVER_BUCKET).getPublicUrl(uploadedPath);
+          const optimizedUrl = publicUrlData?.publicUrl;
+          if (!optimizedUrl) throw new Error("Supabase did not return the optimized cover URL.");
+
+          const { data: updatedBook, error: updateError } = await supabase
+            .from("books")
+            .update({ cover_image_url: optimizedUrl })
+            .eq("id", book.id)
+            .eq("cover_image_url", book.cover_image_url)
+            .select("id")
+            .maybeSingle();
+          if (updateError) throw updateError;
+          if (!updatedBook) throw new Error("Book cover changed during optimization; the original URL was retained.");
+
+          optimizedCount += 1;
+        } catch (error) {
+          if (uploadedPath) {
+            try { await supabase.storage.from(COVER_BUCKET).remove([uploadedPath]); } catch {}
+          }
+          failures.push(`${book.title || book.id}: ${error?.message || "Unknown error"}`);
+        } finally {
+          setCoverOptimizationProgress({ done: index + 1, total: candidates.length });
+        }
+      }
+
+      await loadBooks();
+      await logAdminAction({
+        action: "book_covers_bulk_optimized",
+        targetType: "book_cover_batch",
+        targetName: "Existing book covers",
+        details: { candidates: candidates.length, optimized: optimizedCount, skipped: skippedCount, failed: failures.length }
+      });
+      const summary = `Cover optimization finished: ${optimizedCount} optimized, ${skippedCount} skipped, ${failures.length} failed.`;
+      if (failures.length) {
+        console.error("Some book covers could not be optimized:", failures);
+        showToast(`${summary} See console for failed titles.`, "warning");
+      } else {
+        showToast(summary, "success");
+      }
+    } finally {
+      setOptimizingCovers(false);
+    }
+  }
+
   async function deleteBook(book) {
     const { data, error } = await supabase
       .from("books")
@@ -1189,9 +1302,15 @@ function Books() {
           <h3>Books</h3>
           <p className="muted">Manage the books stored in Heartshapers.</p>
         </div>
-        <button className="primary-btn" onClick={() => { setSelected(null); setModal("book"); }}>
-          <Plus size={18} /> Add Book
-        </button>
+        <div className="heading-actions">
+          <button className="secondary-btn" onClick={optimizeExistingCovers} disabled={optimizingCovers || loading || !books.length}>
+            {optimizingCovers ? <Loader2 size={18} className="spin" /> : <ImageIcon size={18} />}
+            {optimizingCovers ? `Optimizing ${coverOptimizationProgress.done}/${coverOptimizationProgress.total}` : "Optimize Existing Covers"}
+          </button>
+          <button className="primary-btn" onClick={() => { setSelected(null); setModal("book"); }}>
+            <Plus size={18} /> Add Book
+          </button>
+        </div>
       </div>
 
       <div className="toolbar">
