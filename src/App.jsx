@@ -57,6 +57,47 @@ import {
 
 const DEFAULT_BOOK_AUTHOR = "Compiled and Edited by HEARTSHAPERS";
 
+async function optimizeBookCover(file) {
+  if (!file || !file.type?.startsWith("image/") || typeof document === "undefined" || typeof createImageBitmap !== "function") {
+    return file;
+  }
+
+  let bitmap;
+  try {
+    bitmap = await createImageBitmap(file);
+    const maxDimension = 1600;
+    const scale = Math.min(1, maxDimension / Math.max(bitmap.width, bitmap.height));
+    if (scale === 1 && file.size <= 350 * 1024) {
+      return file;
+    }
+
+    const canvas = document.createElement("canvas");
+    canvas.width = Math.max(1, Math.round(bitmap.width * scale));
+    canvas.height = Math.max(1, Math.round(bitmap.height * scale));
+    const context = canvas.getContext("2d");
+    if (!context) return file;
+    context.drawImage(bitmap, 0, 0, canvas.width, canvas.height);
+
+    const optimizedBlob = await new Promise((resolve) => {
+      canvas.toBlob(resolve, "image/webp", 0.82);
+    });
+    if (!optimizedBlob || optimizedBlob.size >= file.size) {
+      return file;
+    }
+
+    const baseName = file.name.replace(/\.[^.]+$/, "");
+    return new File([optimizedBlob], `${baseName}.webp`, {
+      type: "image/webp",
+      lastModified: Date.now()
+    });
+  } catch (error) {
+    console.warn("Cover optimization skipped; uploading the original image.", error);
+    return file;
+  } finally {
+    bitmap?.close?.();
+  }
+}
+
 const EMPTY_BOOK = {
   id: null,
   title: "",
@@ -1222,7 +1263,7 @@ function Books() {
                     <td>
                       <div className="book-cell">
                         {book.cover_image_url ? (
-                          <img src={book.cover_image_url} alt="" />
+                          <img src={book.cover_image_url} alt="" loading="lazy" decoding="async" />
                         ) : (
                           <div className="cover-placeholder"><BookOpen size={20} /></div>
                         )}
@@ -1648,15 +1689,17 @@ function BookModal({ book, onClose, onSaved }) {
   async function uploadFile(file, bucket, folder) {
     if (!file) return null;
 
-    const safeName = file.name.toLowerCase().replace(/[^a-z0-9._-]/g, "-");
+    const isCover = folder === "covers";
+    const uploadFile = isCover ? await optimizeBookCover(file) : file;
+    const safeName = uploadFile.name.toLowerCase().replace(/[^a-z0-9._-]/g, "-");
     const path = `${folder}/${crypto.randomUUID()}-${safeName}`;
     const storage = supabase.storage.from(bucket);
 
-    const { error } = await storage.upload(path, file, {
-      upsert: false
+    const { error } = await storage.upload(path, uploadFile, {
+      upsert: false,
+      contentType: uploadFile.type || undefined,
+      cacheControl: "31536000"
     });
-
-    const isCover = folder === "covers";
     if (error) {
       const fileLabel = isCover ? "book cover" : "book PDF";
       if (/bucket not found/i.test(error.message || "")) {
