@@ -967,6 +967,11 @@ export default function GamesPage({ canManageGames, ConfirmModal, showToast }) {
         <div>
           <h3>Games</h3>
           <p className="muted">Manage the games stored in Heartshapers.</p>
+          {gameCoverOptimizationProgress && (
+            <p className="muted" role="status">
+              Optimizing existing game covers ({gameCoverOptimizationProgress.done}/{gameCoverOptimizationProgress.total})…
+            </p>
+          )}
         </div>
         <button type="button" className="primary-btn" onClick={() => setAddGameOpen(true)}>
           <Plus size={18} /> Add Game
