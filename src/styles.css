@@ -129,6 +129,7 @@ nav { display: grid; gap: 5px; }
 .content { padding: 30px 32px 50px; max-width: 1400px; }
 
 .welcome-row, .page-heading { display: flex; align-items: center; justify-content: space-between; gap: 20px; margin-bottom: 22px; }
+.heading-actions { display: flex; align-items: center; justify-content: flex-end; gap: 10px; flex-wrap: wrap; }
 .welcome-row h3, .page-heading h3 { margin: 0; font-size: 24px; }
 .muted { color: #8a93a3; font-size: 13px; }
 .page-heading .muted, .welcome-row .muted { margin: 5px 0 0; }

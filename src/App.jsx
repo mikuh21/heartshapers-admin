@@ -57,6 +57,34 @@ import {
 
 const DEFAULT_BOOK_AUTHOR = "Compiled and Edited by HEARTSHAPERS";
 
+const COVER_OPTIMIZATION_SETTING_KEY = "cover_optimization_v1";
+
+async function loadCoverOptimizationState() {
+  const { data, error } = await supabase
+    .from("app_settings")
+    .select("value")
+    .eq("key", COVER_OPTIMIZATION_SETTING_KEY)
+    .maybeSingle();
+  if (error) throw error;
+  const value = data?.value;
+  return value && typeof value === "object" && Array.isArray(value.attemptedBookIds)
+    ? value
+    : { version: 1, attemptedBookIds: [], optimized: 0, skipped: 0, failed: 0 };
+}
+
+async function saveCoverOptimizationState(state) {
+  const { data: sessionData } = await supabase.auth.getSession();
+  const { error } = await supabase
+    .from("app_settings")
+    .upsert({
+      key: COVER_OPTIMIZATION_SETTING_KEY,
+      value: state,
+      updated_at: new Date().toISOString(),
+      updated_by: sessionData?.session?.user?.id || null
+    }, { onConflict: "key" });
+  if (error) throw error;
+}
+
 async function optimizeBookCover(file) {
   if (!file || !file.type?.startsWith("image/") || typeof document === "undefined" || typeof createImageBitmap !== "function") {
     return file;
@@ -93,6 +121,36 @@ async function optimizeBookCover(file) {
   } catch (error) {
     console.warn("Cover optimization skipped; uploading the original image.", error);
     return file;
+  } finally {
+    bitmap?.close?.();
+  }
+}
+
+async function optimizeExistingCoverUrl(url) {
+  if (!url || typeof createImageBitmap !== "function" || typeof document === "undefined") {
+    throw new Error("This browser does not support cover optimization.");
+  }
+  const response = await fetch(url);
+  if (!response.ok) throw new Error(`Unable to download cover (HTTP ${response.status}).`);
+  const sourceBlob = await response.blob();
+  if (!sourceBlob.type.startsWith("image/")) throw new Error("The cover URL did not return an image.");
+  let bitmap;
+  try {
+    bitmap = await createImageBitmap(sourceBlob);
+    const maxDimension = 1400;
+    const scale = Math.min(1, maxDimension / Math.max(bitmap.width, bitmap.height));
+    const canvas = document.createElement("canvas");
+    canvas.width = Math.max(1, Math.round(bitmap.width * scale));
+    canvas.height = Math.max(1, Math.round(bitmap.height * scale));
+    const context = canvas.getContext("2d");
+    if (!context) throw new Error("Unable to initialize the image optimizer.");
+    context.drawImage(bitmap, 0, 0, canvas.width, canvas.height);
+    const optimizedBlob = await new Promise((resolve) => canvas.toBlob(resolve, "image/webp", 0.78));
+    if (!optimizedBlob) throw new Error("The browser could not encode the optimized cover.");
+    if (optimizedBlob.size >= sourceBlob.size * 0.9) {
+      return { blob: null, originalBytes: sourceBlob.size, optimizedBytes: optimizedBlob.size };
+    }
+    return { blob: optimizedBlob, originalBytes: sourceBlob.size, optimizedBytes: optimizedBlob.size };
   } finally {
     bitmap?.close?.();
   }
@@ -1099,6 +1157,9 @@ function Books() {
   const [selected, setSelected] = useState(null);
   const [accessBook, setAccessBook] = useState(null);
   const [bookToDelete, setBookToDelete] = useState(null);
+  const coverOptimizationStartedRef = useRef(false);
+  const [optimizingCovers, setOptimizingCovers] = useState(false);
+  const [coverOptimizationProgress, setCoverOptimizationProgress] = useState({ done: 0, total: 0 });
 
   async function loadBooks() {
     setLoading(true);
@@ -1151,6 +1212,126 @@ function Books() {
     return text.includes(search.toLowerCase()) && matchesPillar && matchesSubcategory;
   });
 
+  async function optimizeExistingCovers() {
+    let state;
+    try {
+      state = await loadCoverOptimizationState();
+    } catch (error) {
+      console.error("Unable to read persistent cover optimization state.", error);
+      showToast("Cover optimization could not start because its progress state could not be loaded.", "error");
+      return false;
+    }
+
+    const attemptedBookIds = new Set(state.attemptedBookIds);
+    const candidates = books.filter((book) => {
+      const url = book.cover_image_url || "";
+      return url
+        && !url.includes("/optimized/")
+        && !url.toLowerCase().endsWith(".webp")
+        && !attemptedBookIds.has(book.id);
+    });
+    if (!candidates.length) {
+      showToast("No unprocessed book covers need optimization.", "info");
+      return true;
+    }
+
+    setOptimizingCovers(true);
+    setCoverOptimizationProgress({ done: 0, total: candidates.length });
+    let optimizedCount = 0;
+    let skippedCount = 0;
+    const failures = [];
+    try {
+      for (let index = 0; index < candidates.length; index += 1) {
+        const book = candidates[index];
+        let uploadedPath = null;
+        let outcome = "failed";
+        try {
+          const result = await optimizeExistingCoverUrl(book.cover_image_url);
+          if (!result.blob) {
+            skippedCount += 1;
+            outcome = "skipped";
+          } else {
+            uploadedPath = `covers/optimized/${book.id}-${Date.now()}.webp`;
+            const { error: uploadError } = await supabase.storage.from(COVER_BUCKET).upload(uploadedPath, result.blob, {
+              contentType: "image/webp",
+              cacheControl: "31536000",
+              upsert: false
+            });
+            if (uploadError) throw uploadError;
+
+            const { data: publicUrlData } = supabase.storage.from(COVER_BUCKET).getPublicUrl(uploadedPath);
+            const optimizedUrl = publicUrlData?.publicUrl;
+            if (!optimizedUrl) throw new Error("Supabase did not return the optimized cover URL.");
+
+            const { data: updatedBook, error: updateError } = await supabase
+              .from("books")
+              .update({ cover_image_url: optimizedUrl })
+              .eq("id", book.id)
+              .eq("cover_image_url", book.cover_image_url)
+              .select("id")
+              .maybeSingle();
+            if (updateError) throw updateError;
+            if (!updatedBook) throw new Error("Book cover changed during optimization; the original URL was retained.");
+
+            optimizedCount += 1;
+            outcome = "optimized";
+          }
+        } catch (error) {
+          if (uploadedPath) {
+            try { await supabase.storage.from(COVER_BUCKET).remove([uploadedPath]); } catch {}
+          }
+          failures.push(`${book.title || book.id}: ${error?.message || "Unknown error"}`);
+        } finally {
+          attemptedBookIds.add(book.id);
+          state = {
+            ...state,
+            version: 1,
+            attemptedBookIds: [...attemptedBookIds],
+            optimized: (Number(state.optimized) || 0) + (outcome === "optimized" ? 1 : 0),
+            skipped: (Number(state.skipped) || 0) + (outcome === "skipped" ? 1 : 0),
+            failed: (Number(state.failed) || 0) + (outcome === "failed" ? 1 : 0),
+            lastAttemptAt: new Date().toISOString(),
+            status: "in_progress"
+          };
+          try {
+            await saveCoverOptimizationState(state);
+          } catch (stateError) {
+            failures.push(`Progress save for ${book.title || book.id}: ${stateError?.message || "Unable to save progress"}`);
+          }
+          setCoverOptimizationProgress({ done: index + 1, total: candidates.length });
+        }
+      }
+
+      await loadBooks();
+      state = {
+        ...state,
+        status: "completed",
+        lastCompletedAt: new Date().toISOString()
+      };
+      try {
+        await saveCoverOptimizationState(state);
+      } catch (stateError) {
+        console.error("Unable to save final cover optimization status.", stateError);
+      }
+      await logAdminAction({
+        action: "book_covers_bulk_optimized",
+        targetType: "book_cover_batch",
+        targetName: "Existing book covers",
+        details: { candidates: candidates.length, optimized: optimizedCount, skipped: skippedCount, failed: failures.length }
+      });
+      const summary = `Cover optimization finished: ${optimizedCount} optimized, ${skippedCount} skipped, ${failures.length} failed.`;
+      if (failures.length) {
+        console.error("Some book covers could not be optimized:", failures);
+        showToast(`${summary} See console for failed titles.`, "warning");
+      } else {
+        showToast(summary, "success");
+      }
+      return true;
+    } finally {
+      setOptimizingCovers(false);
+    }
+  }
+
   async function deleteBook(book) {
     const { data, error } = await supabase
       .from("books")
@@ -1189,9 +1370,16 @@ function Books() {
           <h3>Books</h3>
           <p className="muted">Manage the books stored in Heartshapers.</p>
         </div>
-        <button className="primary-btn" onClick={() => { setSelected(null); setModal("book"); }}>
-          <Plus size={18} /> Add Book
-        </button>
+        <div className="heading-actions">
+          {optimizingCovers && (
+            <span className="muted" role="status">
+              Optimizing existing covers ({coverOptimizationProgress.done}/{coverOptimizationProgress.total})…
+            </span>
+          )}
+          <button className="primary-btn" onClick={() => { setSelected(null); setModal("book"); }}>
+            <Plus size={18} /> Add Book
+          </button>
+        </div>
       </div>
 
       <div className="toolbar">
