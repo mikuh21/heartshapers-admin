@@ -1208,7 +1208,7 @@ function Books() {
             skippedCount += 1;
             continue;
           }
-          uploadedPath = `optimized/${book.id}-${Date.now()}.webp`;
+          uploadedPath = `covers/optimized/${book.id}-${Date.now()}.webp`;
           const { error: uploadError } = await supabase.storage.from(COVER_BUCKET).upload(uploadedPath, result.blob, {
             contentType: "image/webp",
             cacheControl: "31536000",
