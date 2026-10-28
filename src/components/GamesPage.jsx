@@ -902,7 +902,10 @@ export default function GamesPage({ canManageGames, ConfirmModal, showToast }) {
       } else {
         showToast(`Game cover optimization finished: ${optimizedCount} optimized, ${skippedCount} skipped.`, "success");
       }
-      if (active) setRefreshKey((current) => current + 1);
+      if (active) {
+        setGameCoverOptimizationProgress(null);
+        setRefreshKey((current) => current + 1);
+      }
     };
 
     void runOptimization();
