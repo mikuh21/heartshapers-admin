@@ -1129,6 +1129,7 @@ function Books() {
   const [selected, setSelected] = useState(null);
   const [accessBook, setAccessBook] = useState(null);
   const [bookToDelete, setBookToDelete] = useState(null);
+  const coverOptimizationStartedRef = useRef(false);
   const [optimizingCovers, setOptimizingCovers] = useState(false);
   const [coverOptimizationProgress, setCoverOptimizationProgress] = useState({ done: 0, total: 0 });
 
@@ -1259,6 +1260,20 @@ function Books() {
     }
   }
 
+  useEffect(() => {
+    if (loading || !books.length || optimizingCovers) return;
+    if (coverOptimizationStartedRef.current) return;
+
+    const candidates = books.filter((book) => {
+      const url = book.cover_image_url || "";
+      return url && !url.includes("/optimized/") && !url.toLowerCase().endsWith(".webp");
+    });
+    if (!candidates.length) return;
+
+    coverOptimizationStartedRef.current = true;
+    void optimizeExistingCovers();
+  }, [books, loading, optimizingCovers]);
+
   async function deleteBook(book) {
     const { data, error } = await supabase
       .from("books")
@@ -1298,17 +1313,11 @@ function Books() {
           <p className="muted">Manage the books stored in Heartshapers.</p>
         </div>
         <div className="heading-actions">
-          <ConfirmingButton
-            onConfirm={optimizeExistingCovers}
-            title="Optimize Existing Covers?"
-            message="This will download the current book covers once, so egress may temporarily rise. Smaller WebP copies will be uploaded and each book will be switched to its optimized copy. Original files will be retained for rollback. Keep this page open until it finishes."
-            actionLabel="Optimize Covers"
-            disabled={optimizingCovers || loading || !books.length}
-            className="secondary-btn"
-          >
-            {optimizingCovers ? <Loader2 size={18} className="spin" /> : <ImageIcon size={18} />}
-            {optimizingCovers ? `Optimizing ${coverOptimizationProgress.done}/${coverOptimizationProgress.total}` : "Optimize Existing Covers"}
-          </ConfirmingButton>
+          {optimizingCovers && (
+            <span className="muted" role="status">
+              Optimizing existing covers ({coverOptimizationProgress.done}/{coverOptimizationProgress.total})…
+            </span>
+          )}
           <button className="primary-btn" onClick={() => { setSelected(null); setModal("book"); }}>
             <Plus size={18} /> Add Book
           </button>
