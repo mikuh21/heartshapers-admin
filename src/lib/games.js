@@ -5,6 +5,41 @@ import {
   loadGameUploadLimit
 } from "./uploadSettings";
 
+ 
+async function optimizeGameCoverFile(file) {
+  if (!file || typeof createImageBitmap !== "function" || typeof document === "undefined") return file;
+  let bitmap;
+  try {
+    bitmap = await createImageBitmap(file);
+    const maxDimension = 1200;
+    const scale = Math.min(1, maxDimension / Math.max(bitmap.width, bitmap.height));
+    if (scale === 1 && file.size <= 350 * 1024) return file;
+    const canvas = document.createElement("canvas");
+    canvas.width = Math.max(1, Math.round(bitmap.width * scale));
+    canvas.height = Math.max(1, Math.round(bitmap.height * scale));
+    const context = canvas.getContext("2d");
+    if (!context) return file;
+    context.drawImage(bitmap, 0, 0, canvas.width, canvas.height);
+    const blob = await new Promise((resolve) => canvas.toBlob(resolve, "image/webp", 0.78));
+    if (!blob || blob.size >= file.size) return file;
+    const baseName = String(file.name || "game-cover").replace(/\.[^.]+$/, "");
+    return new File([blob], `${baseName}.webp`, { type: "image/webp", lastModified: Date.now() });
+  } catch (error) {
+    console.warn("Game cover optimization skipped; the original file will be uploaded.", error);
+    return file;
+  } finally {
+    bitmap?.close?.();
+  }
+}
+
+function getGameCoverExtension(file) {
+  return {
+    "image/jpeg": "jpg",
+    "image/png": "png",
+    "image/webp": "webp"
+  }[file?.type];
+}
+
 export async function createGame(game) {
   const { data, error } = await supabase
     .from("games")
@@ -35,13 +70,9 @@ export async function createGame(game) {
 export async function createPdfGame(gameData, coverFile, sourcePdfFile, pageFiles) {
   const uploadedPaths = [];
   let preserveUploadedAssets = false;
-  const coverExtension = {
-    "image/jpeg": "jpg",
-    "image/png": "png",
-    "image/webp": "webp"
-  }[coverFile?.type];
+  const originalCoverExtension = getGameCoverExtension(coverFile);
 
-  if (!coverExtension) {
+  if (!originalCoverExtension) {
     throw new Error("Choose a JPEG, PNG, or WebP cover image.");
   }
   if (!Array.isArray(pageFiles) || pageFiles.length === 0) {
@@ -64,13 +95,15 @@ export async function createPdfGame(gameData, coverFile, sourcePdfFile, pageFile
   if (coverFile.size > uploadLimit.maximumBytes || sourcePdfFile.size > uploadLimit.maximumBytes) {
     throw new Error(gameUploadSizeError(uploadLimit));
   }
+  const optimizedCoverFile = await optimizeGameCoverFile(coverFile);
+  const coverExtension = getGameCoverExtension(optimizedCoverFile);
 
   const coverPath = `games/${gameData.id}/cover/cover.${coverExtension}`;
   const sourcePdfPath = `games/${gameData.id}/source/content.pdf`;
   try {
     const { error: coverError } = await supabase.storage
       .from("game-assets")
-      .upload(coverPath, coverFile, { contentType: coverFile.type, upsert: false });
+      .upload(coverPath, optimizedCoverFile, { contentType: optimizedCoverFile.type, cacheControl: "31536000", upsert: false });
     if (coverError) throw describeGameStorageUploadError(coverError, uploadLimit);
     uploadedPaths.push(coverPath);
 
@@ -259,6 +292,7 @@ export async function updatePdfGame(gameData, { coverFile = null, sourcePdfFile 
       throw new Error(gameUploadSizeError(uploadLimit));
     }
   }
+  const optimizedCoverFile = coverFile ? await optimizeGameCoverFile(coverFile) : null;
   if (sourcePdfFile && !Array.isArray(pageFiles)) {
     throw new Error("Select card pages from the replacement PDF.");
   }
@@ -293,12 +327,8 @@ export async function updatePdfGame(gameData, { coverFile = null, sourcePdfFile 
   const storage = supabase.storage.from("game-assets");
   const uploadedPaths = [];
   const version = crypto.randomUUID();
-  const coverExtension = {
-    "image/jpeg": "jpg",
-    "image/png": "png",
-    "image/webp": "webp"
-  }[coverFile?.type];
-  const newCoverPath = coverFile
+  const coverExtension = getGameCoverExtension(optimizedCoverFile);
+  const newCoverPath = optimizedCoverFile
     ? `${gamePrefix}cover/${version}.${coverExtension}`
     : undefined;
   const newSourcePath = sourcePdfFile
@@ -324,8 +354,9 @@ export async function updatePdfGame(gameData, { coverFile = null, sourcePdfFile 
 
   try {
     if (coverFile) {
-      const { error } = await storage.upload(newCoverPath, coverFile, {
-        contentType: coverFile.type,
+      const { error } = await storage.upload(newCoverPath, optimizedCoverFile, {
+        contentType: optimizedCoverFile.type,
+        cacheControl: "31536000",
         upsert: false
       });
       if (error) throw describeGameStorageUploadError(error, uploadLimit);
@@ -613,27 +644,26 @@ export async function updateGameAccess(gameId, isLocked, changes = {}) {
 }
 
 export async function updateGameWithCover(gameId, isLocked, changes, coverFile = null) {
-  const coverExtension = {
-    "image/jpeg": "jpg",
-    "image/png": "png",
-    "image/webp": "webp"
-  }[coverFile?.type];
-  if (coverFile && !coverExtension) {
+  const originalCoverExtension = getGameCoverExtension(coverFile);
+  if (coverFile && !originalCoverExtension) {
     throw new Error("Choose a JPEG, PNG, or WebP cover image.");
   }
   const uploadLimit = coverFile ? await loadGameUploadLimit() : null;
   if (coverFile && coverFile.size > uploadLimit.maximumBytes) {
     throw new Error(gameUploadSizeError(uploadLimit));
   }
+  const optimizedCoverFile = coverFile ? await optimizeGameCoverFile(coverFile) : null;
+  const coverExtension = getGameCoverExtension(optimizedCoverFile);
 
-  const coverPath = coverFile
+  const coverPath = optimizedCoverFile
     ? `games/${gameId}/cover/${crypto.randomUUID()}.${coverExtension}`
     : null;
   if (coverFile) {
     const { error: uploadError } = await supabase.storage
       .from("game-assets")
-      .upload(coverPath, coverFile, {
-        contentType: coverFile.type,
+      .upload(coverPath, optimizedCoverFile, {
+        contentType: optimizedCoverFile.type,
+        cacheControl: "31536000",
         upsert: false
       });
     if (uploadError) {
