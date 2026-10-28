@@ -31,8 +31,64 @@ import {
   updatePdfGame
 } from "../lib/games";
 import { gameUploadSizeError, loadGameUploadLimit } from "../lib/uploadSettings";
+import { supabase } from "../lib/supabase";
 
 const CARD_PAGE_SIZE = 20;
+
+const GAME_COVER_OPTIMIZATION_KEY = "game_cover_optimization_v1";
+
+async function loadGameCoverOptimizationState() {
+  const { data, error } = await supabase
+    .from("app_settings")
+    .select("value")
+    .eq("key", GAME_COVER_OPTIMIZATION_KEY)
+    .maybeSingle();
+  if (error) throw error;
+  const value = data?.value;
+  return value && typeof value === "object" && Array.isArray(value.attemptedGameIds)
+    ? value
+    : { version: 1, attemptedGameIds: [], optimized: 0, skipped: 0, failed: 0 };
+}
+
+async function saveGameCoverOptimizationState(state) {
+  const { data: sessionData } = await supabase.auth.getSession();
+  const { error } = await supabase
+    .from("app_settings")
+    .upsert({
+      key: GAME_COVER_OPTIMIZATION_KEY,
+      value: state,
+      updated_at: new Date().toISOString(),
+      updated_by: sessionData?.session?.user?.id || null
+    }, { onConflict: "key" });
+  if (error) throw error;
+}
+
+async function optimizeExistingGameCover(url) {
+  if (!url || typeof createImageBitmap !== "function" || typeof document === "undefined") {
+    throw new Error("This browser does not support cover optimization.");
+  }
+  const response = await fetch(url);
+  if (!response.ok) throw new Error(`Unable to download cover (HTTP ${response.status}).`);
+  const sourceBlob = await response.blob();
+  if (!sourceBlob.type.startsWith("image/")) throw new Error("The cover URL did not return an image.");
+  let bitmap;
+  try {
+    bitmap = await createImageBitmap(sourceBlob);
+    const maxDimension = 1200;
+    const scale = Math.min(1, maxDimension / Math.max(bitmap.width, bitmap.height));
+    const canvas = document.createElement("canvas");
+    canvas.width = Math.max(1, Math.round(bitmap.width * scale));
+    canvas.height = Math.max(1, Math.round(bitmap.height * scale));
+    const context = canvas.getContext("2d");
+    if (!context) throw new Error("Unable to initialize the image optimizer.");
+    context.drawImage(bitmap, 0, 0, canvas.width, canvas.height);
+    const blob = await new Promise((resolve) => canvas.toBlob(resolve, "image/webp", 0.78));
+    if (!blob) throw new Error("The browser could not encode the optimized cover.");
+    return blob.size < sourceBlob.size * 0.9 ? blob : null;
+  } finally {
+    bitmap?.close?.();
+  }
+}
 
 function ConfirmingForm({ children, onConfirm, ConfirmModal, title, message, actionLabel = "Save Changes", shouldConfirm = true, ...formProps }) {
   const [open, setOpen] = useState(false);
@@ -703,6 +759,8 @@ export default function GamesPage({ canManageGames, ConfirmModal, showToast }) {
   const [refreshKey, setRefreshKey] = useState(0);
   const [gameUploadLimit, setGameUploadLimit] = useState(null);
   const [uploadLimitError, setUploadLimitError] = useState("");
+  const gameCoverOptimizationStartedRef = useRef(false);
+  const [gameCoverOptimizationProgress, setGameCoverOptimizationProgress] = useState(null);
 
   useEffect(() => {
     if (!addGameOpen && !editingPdfGame && !selectedGame) return undefined;
@@ -746,6 +804,110 @@ export default function GamesPage({ canManageGames, ConfirmModal, showToast }) {
       active = false;
     };
   }, [refreshKey]);
+
+  useEffect(() => {
+    if (loading || !games.length || gameCoverOptimizationStartedRef.current) return;
+    gameCoverOptimizationStartedRef.current = true;
+    let active = true;
+
+    const runOptimization = async () => {
+      let state;
+      try {
+        state = await loadGameCoverOptimizationState();
+      } catch (error) {
+        console.error("Unable to read persistent game-cover optimization state.", error);
+        return;
+      }
+      const attempted = new Set(state.attemptedGameIds);
+      const candidates = games.filter((game) => {
+        const path = String(game.cover_image_url || "");
+        return path.startsWith("games/")
+          && !path.toLowerCase().endsWith(".webp")
+          && !path.includes("/optimized")
+          && Boolean(game.cover_display_url)
+          && !attempted.has(game.id);
+      });
+      if (!candidates.length) return;
+
+      setGameCoverOptimizationProgress({ done: 0, total: candidates.length });
+      let optimizedCount = 0;
+      let skippedCount = 0;
+      const failures = [];
+      for (let index = 0; index < candidates.length; index += 1) {
+        if (!active) return;
+        const game = candidates[index];
+        let outcome = "failed";
+        let uploadedPath = null;
+        try {
+          const blob = await optimizeExistingGameCover(game.cover_display_url);
+          if (!blob) {
+            skippedCount += 1;
+            outcome = "skipped";
+          } else {
+            uploadedPath = `games/${game.id}/cover/optimized-${Date.now()}.webp`;
+            const { error: uploadError } = await supabase.storage.from("game-assets").upload(uploadedPath, blob, {
+              contentType: "image/webp",
+              cacheControl: "31536000",
+              upsert: false
+            });
+            if (uploadError) throw uploadError;
+            const { data, error: updateError } = await supabase
+              .from("games")
+              .update({ cover_image_url: uploadedPath })
+              .eq("id", game.id)
+              .eq("cover_image_url", game.cover_image_url)
+              .select("id")
+              .maybeSingle();
+            if (updateError) throw updateError;
+            if (!data) throw new Error("The game cover changed during optimization; the original was retained.");
+            optimizedCount += 1;
+            outcome = "optimized";
+          }
+        } catch (error) {
+          failures.push(`${game.title || game.id}: ${error?.message || "Unknown error"}`);
+          // Keep uploaded files rather than risk deleting an object after an uncertain database update.
+        } finally {
+          attempted.add(game.id);
+          state = {
+            ...state,
+            version: 1,
+            attemptedGameIds: [...attempted],
+            optimized: (Number(state.optimized) || 0) + (outcome === "optimized" ? 1 : 0),
+            skipped: (Number(state.skipped) || 0) + (outcome === "skipped" ? 1 : 0),
+            failed: (Number(state.failed) || 0) + (outcome === "failed" ? 1 : 0),
+            lastAttemptAt: new Date().toISOString(),
+            status: "in_progress"
+          };
+          try {
+            await saveGameCoverOptimizationState(state);
+          } catch (stateError) {
+            failures.push(`Progress save for ${game.title || game.id}: ${stateError?.message || "Unable to save progress"}`);
+          }
+          if (active) setGameCoverOptimizationProgress({ done: index + 1, total: candidates.length });
+        }
+      }
+
+      state = { ...state, status: "completed", lastCompletedAt: new Date().toISOString() };
+      try { await saveGameCoverOptimizationState(state); }
+      catch (error) { console.error("Unable to save final game-cover optimization status.", error); }
+      await logAdminAction({
+        action: "game_covers_bulk_optimized",
+        targetType: "game_cover_batch",
+        targetName: "Existing game covers",
+        details: { candidates: candidates.length, optimized: optimizedCount, skipped: skippedCount, failed: failures.length }
+      });
+      if (failures.length) {
+        console.error("Some game covers could not be optimized:", failures);
+        showToast(`Game cover optimization finished: ${optimizedCount} optimized, ${skippedCount} skipped, ${failures.length} failed. See console for failed titles.`, "warning");
+      } else {
+        showToast(`Game cover optimization finished: ${optimizedCount} optimized, ${skippedCount} skipped.`, "success");
+      }
+      if (active) setRefreshKey((current) => current + 1);
+    };
+
+    void runOptimization();
+    return () => { active = false; };
+  }, [games, loading, showToast]);
 
   const filteredGames = useMemo(() => {
     const query = search.trim().toLowerCase();
