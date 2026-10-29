@@ -109,7 +109,7 @@ export async function createPdfGame(gameData, coverFile, sourcePdfFile, pageFile
 
     const { error: sourcePdfError } = await supabase.storage
       .from("game-assets")
-      .upload(sourcePdfPath, sourcePdfFile, { contentType: "application/pdf", upsert: false });
+      .upload(sourcePdfPath, sourcePdfFile, { contentType: "application/pdf", cacheControl: "31536000", upsert: false });
     if (sourcePdfError) throw describeGameStorageUploadError(sourcePdfError, uploadLimit);
     uploadedPaths.push(sourcePdfPath);
 
@@ -119,7 +119,7 @@ export async function createPdfGame(gameData, coverFile, sourcePdfFile, pageFile
       const path = `games/${gameData.id}/cards/page-${String(index + 1).padStart(4, "0")}.png`;
       const { error: pageError } = await supabase.storage
         .from("game-assets")
-        .upload(path, blob, { contentType: "image/png", upsert: false });
+        .upload(path, blob, { contentType: "image/png", cacheControl: "31536000", upsert: false });
       if (pageError) throw describeGameStorageUploadError(pageError, uploadLimit);
       uploadedPaths.push(path);
       cardRows.push({
@@ -366,6 +366,7 @@ export async function updatePdfGame(gameData, { coverFile = null, sourcePdfFile 
     if (sourcePdfFile) {
       const { error } = await storage.upload(newSourcePath, sourcePdfFile, {
         contentType: "application/pdf",
+        cacheControl: "31536000",
         upsert: false
       });
       if (error) throw describeGameStorageUploadError(error, uploadLimit);
@@ -377,6 +378,7 @@ export async function updatePdfGame(gameData, { coverFile = null, sourcePdfFile 
         const path = cardRows[index].metadata.pdf_page_path;
         const { error } = await storage.upload(path, pageFiles[index].blob, {
           contentType: "image/png",
+          cacheControl: "31536000",
           upsert: false
         });
         if (error) throw describeGameStorageUploadError(error, uploadLimit);
