@@ -4017,12 +4017,14 @@ function SettingsPage() {
                 accept="image/*"
                 multiple
                 onChange={async (event) => {
-                  const files = Array.from(event.target.files || []);
+                  const input = event.currentTarget;
+                  const files = Array.from(input.files || []);
                   if (!files.length) return;
                   setPaymentQrFileName(files.map((file) => file.name).join(", "));
                   for (const file of files) {
-                    await uploadPaymentQr({ target: { files: [file], value: "" } });
+                    await uploadPaymentQr({ target: { files: [file] } });
                   }
+                  input.value = "";
                 }}
                 disabled={paymentSettingsLoading}
               />
