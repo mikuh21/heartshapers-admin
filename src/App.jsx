@@ -3467,8 +3467,7 @@ function SettingsPage() {
         const nextPaths = [...new Set([...currentPaths, path])];
         return { ...current, qr_image_urls: nextPaths, qr_image_url: nextPaths[0] || "" };
       });
-      setPaymentQrFileName("");
-      event.target.value = "";
+      if (data?.signedUrl) setPaymentQrPreviews((current) => [...current, { path, url: data.signedUrl }]);
       showToast("QR code uploaded. Save payment settings to apply it.", "success");
     } catch (err) {
       await logAdminAction({
