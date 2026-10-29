@@ -180,6 +180,7 @@ const PAYMENT_PROOF_BUCKET = "payment-proofs";
 const DEFAULT_PAYMENT_SETTINGS = {
   payment_method: "gcash",
   qr_image_url: "",
+  qr_image_urls: [],
   merchant_name: "HEARTSHAPERS",
   instructions: "Scan the GCash QR code to pay."
 };
@@ -225,7 +226,12 @@ async function loadPaymentSettings() {
     .maybeSingle();
 
   if (error) throw error;
-  return { ...DEFAULT_PAYMENT_SETTINGS, ...(data?.value || {}) };
+  const loaded = { ...DEFAULT_PAYMENT_SETTINGS, ...(data?.value || {}) };
+  const qrPaths = Array.isArray(loaded.qr_image_urls) ? loaded.qr_image_urls.filter(Boolean) : [];
+  if (qrPaths.length === 0 && loaded.qr_image_url) qrPaths.push(loaded.qr_image_url);
+  loaded.qr_image_urls = [...new Set(qrPaths)];
+  loaded.qr_image_url = loaded.qr_image_urls[0] || "";
+  return loaded;
 }
 
 async function savePaymentSettingsToSupabase(settings) {
@@ -3260,7 +3266,7 @@ function SettingsPage() {
   const [adminLogs, setAdminLogs] = useState([]);
   const [paymentSettings, setPaymentSettings] = useState(DEFAULT_PAYMENT_SETTINGS);
   const [paymentSettingsLoading, setPaymentSettingsLoading] = useState(true);
-  const [paymentQrPreview, setPaymentQrPreview] = useState("");
+  const [paymentQrPreviews, setPaymentQrPreviews] = useState([]);
   const [paymentQrFileName, setPaymentQrFileName] = useState("");
   const adminLogsRequestRef = useRef(null);
 
@@ -3325,10 +3331,13 @@ function SettingsPage() {
         const [nextUploadSettings, nextPaymentSettings] = await Promise.all([loadUploadSettings(), loadPaymentSettings()]);
         setUploadSettings(nextUploadSettings);
         setPaymentSettings(nextPaymentSettings);
-        if (nextPaymentSettings.qr_image_url) {
-          const { data } = await supabase.storage.from(PAYMENT_PROOF_BUCKET).createSignedUrl(nextPaymentSettings.qr_image_url, 3600);
-          setPaymentQrPreview(data?.signedUrl || "");
-        }
+        const qrPaths = Array.isArray(nextPaymentSettings.qr_image_urls) ? nextPaymentSettings.qr_image_urls : [];
+        const nextPreviews = await Promise.all(qrPaths.map(async (path) => {
+          if (/^https?:\/\//i.test(path)) return { path, url: path };
+          const { data, error } = await supabase.storage.from(PAYMENT_PROOF_BUCKET).createSignedUrl(path, 3600);
+          return { path, url: error ? "" : (data?.signedUrl || "") };
+        }));
+        setPaymentQrPreviews(nextPreviews.filter((item) => item.url));
       } catch (err) {
         showToast(err.message || "Unable to load settings.", "error");
       } finally {
@@ -3408,7 +3417,11 @@ function SettingsPage() {
   async function savePaymentSettings() {
     setPaymentSettingsLoading(true);
     try {
-      const normalized = await savePaymentSettingsToSupabase(paymentSettings);
+      const normalized = await savePaymentSettingsToSupabase({
+        ...paymentSettings,
+        qr_image_urls: Array.isArray(paymentSettings.qr_image_urls) ? paymentSettings.qr_image_urls : (paymentSettings.qr_image_url ? [paymentSettings.qr_image_url] : []),
+        qr_image_url: (Array.isArray(paymentSettings.qr_image_urls) ? paymentSettings.qr_image_urls[0] : paymentSettings.qr_image_url) || ""
+      });
       const changedFields = Object.keys(normalized).filter((key) => normalized[key] !== paymentSettings[key]);
       await logAdminAction({
         action: "payment_settings_updated",
@@ -3449,9 +3462,14 @@ function SettingsPage() {
         details: { file_type: file.type || "image/unknown" }
       });
       const { data } = await supabase.storage.from(PAYMENT_PROOF_BUCKET).createSignedUrl(path, 3600);
-      setPaymentQrPreview(data?.signedUrl || "");
-      setPaymentSettings((current) => ({ ...current, qr_image_url: path }));
-      showToast("QR image uploaded. Save payment settings to apply it.", "success");
+      setPaymentSettings((current) => {
+        const currentPaths = Array.isArray(current.qr_image_urls) ? current.qr_image_urls : (current.qr_image_url ? [current.qr_image_url] : []);
+        const nextPaths = [...new Set([...currentPaths, path])];
+        return { ...current, qr_image_urls: nextPaths, qr_image_url: nextPaths[0] || "" };
+      });
+      setPaymentQrFileName("");
+      event.target.value = "";
+      showToast("QR code uploaded. Save payment settings to apply it.", "success");
     } catch (err) {
       await logAdminAction({
         action: "payment_qr_upload_failed",
@@ -3990,16 +4008,22 @@ function SettingsPage() {
             <input value={paymentSettings.merchant_name} onChange={(event) => setPaymentSettings((current) => ({ ...current, merchant_name: event.target.value }))} />
             <label>Payment instructions</label>
             <textarea rows={3} value={paymentSettings.instructions} onChange={(event) => setPaymentSettings((current) => ({ ...current, instructions: event.target.value }))} />
-            <label>GCash QR code</label>
+            <label>GCash QR codes</label>
+            <p className="muted">Upload multiple QR codes. Customers can choose which QR code to use during checkout.</p>
             <div className="settings-file-control">
               <input
                 className="settings-file-input"
                 id="payment-qr-upload"
                 type="file"
                 accept="image/*"
-                onChange={(event) => {
-                  setPaymentQrFileName(event.target.files?.[0]?.name || "");
-                  uploadPaymentQr(event);
+                multiple
+                onChange={async (event) => {
+                  const files = Array.from(event.target.files || []);
+                  if (!files.length) return;
+                  setPaymentQrFileName(files.map((file) => file.name).join(", "));
+                  for (const file of files) {
+                    await uploadPaymentQr({ target: { files: [file], value: "" } });
+                  }
                 }}
                 disabled={paymentSettingsLoading}
               />
@@ -4008,13 +4032,40 @@ function SettingsPage() {
                 htmlFor="payment-qr-upload"
                 aria-disabled={paymentSettingsLoading}
               >
-                Choose File
+                Add QR Codes
               </label>
               <span className="settings-file-name" aria-live="polite">
-                {paymentQrFileName || "No file chosen"}
+                {paymentQrFileName || "Choose one or more images"}
               </span>
             </div>
-            {paymentQrPreview ? <img className="settings-qr-preview" src={paymentQrPreview} alt="Configured GCash QR" /> : <div className="field-hint">No QR code is configured yet.</div>}
+            {paymentQrPreviews.length ? (
+              <div className="settings-qr-grid">
+                {paymentQrPreviews.map((qr, index) => (
+                  <div className="settings-qr-item" key={qr.path}>
+                    <img className="settings-qr-preview" src={qr.url} alt={`GCash QR code ${index + 1}`} />
+                    <div className="settings-qr-item-footer">
+                      <span>QR Code {index + 1}</span>
+                      <button
+                        type="button"
+                        className="icon-btn danger"
+                        title={`Remove QR code ${index + 1}`}
+                        aria-label={`Remove QR code ${index + 1}`}
+                        onClick={() => {
+                          setPaymentSettings((current) => {
+                            const paths = (Array.isArray(current.qr_image_urls) ? current.qr_image_urls : []).filter((path) => path !== qr.path);
+                            return { ...current, qr_image_urls: paths, qr_image_url: paths[0] || "" };
+                          });
+                          setPaymentQrPreviews((current) => current.filter((item) => item.path !== qr.path));
+                        }}
+                        disabled={paymentSettingsLoading}
+                      >
+                        <Trash2 size={16} />
+                      </button>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            ) : <div className="field-hint">No QR codes configured yet.</div>}
             <div className="settings-form-actions"><ConfirmingButton onConfirm={savePaymentSettings} title="Save Payment Settings?" message="Confirm saving the payment settings." actionLabel="Save Settings" disabled={paymentSettingsLoading}>Save Payment Settings</ConfirmingButton></div>
           </div>
         </div>
