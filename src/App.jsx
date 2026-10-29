@@ -1339,6 +1339,17 @@ function Books() {
     }
   }
 
+  // Start the one-time migration only after the active book list has loaded.
+  // This function downloads each eligible original cover once, so it must not run
+  // during initial loading or again when the list refreshes after optimization.
+  useEffect(() => {
+    if (loading || error || books.length === 0 || coverOptimizationStartedRef.current) return;
+    coverOptimizationStartedRef.current = true;
+    void optimizeExistingCovers();
+    // optimizeExistingCovers intentionally uses the loaded snapshot for this one-time run.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [loading, error, books]);
+
   async function deleteBook(book) {
     const { data, error } = await supabase
       .from("books")
