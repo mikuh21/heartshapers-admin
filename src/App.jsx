@@ -1927,9 +1927,13 @@ function BookModal({ book, onClose, onSaved }) {
       }
     });
 
+    // Covers are intentionally public; book PDFs are stored as private object
+    // paths and signed by the mobile reader only after entitlement checks.
+    if (!isCover) return path;
+
     const { data } = storage.getPublicUrl(path);
     if (!data?.publicUrl) {
-      throw new Error(`The ${isCover ? "book cover" : "book PDF"} uploaded, but Supabase did not return a public URL.`);
+      throw new Error("The book cover uploaded, but Supabase did not return a public URL.");
     }
     return data.publicUrl;
   }
