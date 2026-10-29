@@ -11,8 +11,7 @@ WHERE c.pillar_id = p.id
   AND lower(c.name) = 'group activities';
 
 UPDATE public.categories AS old_category
-SET name = 'Group Dynamics',
-    deleted_at = COALESCE(old_category.deleted_at, now())
+SET deleted_at = COALESCE(old_category.deleted_at, now())
 FROM public.pillars AS p
 WHERE old_category.pillar_id = p.id
   AND p.name = 'Ministry'
