@@ -1916,9 +1916,14 @@ function BookModal({ book, onClose, onSaved }) {
       }
     });
 
+    // Covers are intentionally public catalog artwork. Book PDFs must be stored
+    // as bucket object paths so the mobile app can request a short-lived signed URL
+    // only after its existing book-access check succeeds.
+    if (!isCover) return path;
+
     const { data } = storage.getPublicUrl(path);
     if (!data?.publicUrl) {
-      throw new Error(`The ${isCover ? "book cover" : "book PDF"} uploaded, but Supabase did not return a public URL.`);
+      throw new Error("The book cover uploaded, but Supabase did not return a public URL.");
     }
     return data.publicUrl;
   }
