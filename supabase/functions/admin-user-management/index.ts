@@ -647,7 +647,7 @@ Deno.serve(async (req: Request): Promise<Response> => {
         const { data, error } = await adminClient.auth.admin.createUser({
           email,
           password,
-          email_confirm: false,
+          email_confirm: true,
           user_metadata: {
             full_name: fullName,
           },
@@ -686,52 +686,6 @@ Deno.serve(async (req: Request): Promise<Response> => {
       } catch {
         console.error("Failed to create normal user account.");
         return jsonResponse({ error: "USER_CREATE_FAILED" }, 500);
-      }
-
-      const emailClient = createClient(SUPABASE_URL, ANON_KEY, {
-        auth: {
-          persistSession: false,
-          autoRefreshToken: false,
-        },
-      });
-      let verificationError: { message: string } | null = null;
-      console.log("Sending verification email for:", email);
-      try {
-        const { error } = await emailClient.auth.resend({
-          type: "signup",
-          email,
-          options: {
-            emailRedirectTo: "heartshapers://auth/callback",
-          },
-        });
-        verificationError = error;
-      } catch (error: unknown) {
-        verificationError = {
-          message: error instanceof Error ? error.message : "Unknown verification email error",
-        };
-      }
-
-      if (verificationError) {
-        console.error("Verification email failed:", verificationError.message);
-        let cleanupFailed = false;
-        try {
-          const { error: deleteError } = await adminClient.auth.admin.deleteUser(createdUser.id);
-          cleanupFailed = Boolean(deleteError);
-        } catch {
-          cleanupFailed = true;
-        }
-        if (cleanupFailed) {
-          console.error("Failed to clean up user after verification email failure.");
-        }
-        await insertAdminAuditLog(adminClient, {
-          action: "user_creation_failed",
-          actorEmail: user.email,
-          targetType: "user",
-          targetId: createdUser.id,
-          targetName: fullName,
-          details: { failure_code: "VERIFICATION_EMAIL_FAILED", cleanup_failed: cleanupFailed }
-        });
-        return jsonResponse({ error: "VERIFICATION_EMAIL_FAILED" }, 500);
       }
 
       await insertAdminAuditLog(adminClient, {
