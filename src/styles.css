@@ -935,3 +935,29 @@ td { padding: 13px 17px; border-top: 1px solid #eef0f3; font-size: 13px; }
 @media (max-width: 600px) {
   .modal.payment-confirm-modal { width: calc(100vw - 24px); max-height: calc(100vh - 24px); }
 }
+
+
+/* Subcategory access state: keep the lock control aligned with edit/delete actions. */
+.settings-list-actions .category-lock-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 8px;
+  transition: background-color 0.15s ease, color 0.15s ease;
+}
+.settings-list-actions .category-lock-locked {
+  color: #dc2626;
+  background: #fee2e2;
+}
+.settings-list-actions .category-lock-locked:hover {
+  color: #b91c1c;
+  background: #fecaca;
+}
+.settings-list-actions .category-lock-unlocked {
+  color: #15803d;
+  background: #dcfce7;
+}
+.settings-list-actions .category-lock-unlocked:hover {
+  color: #166534;
+  background: #bbf7d0;
+}
