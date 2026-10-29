@@ -470,7 +470,7 @@ async function loadManagedSettings() {
 
   const { data: categoryRows, error: categoryError } = await supabase
     .from("categories")
-    .select("id, pillar_id, name, created_at")
+    .select("id, pillar_id, name, created_at, is_locked")
     .is("deleted_at", null)
     .order("created_at", { ascending: true });
 
@@ -495,7 +495,8 @@ async function loadManagedSettings() {
         categories: categoryNames.map((categoryName) => ({
           id: (entry.categories.find((category) => category.name === categoryName) || {}).id,
           name: categoryName,
-          pillar_id: entry.id
+          pillar_id: entry.id,
+          is_locked: Boolean((entry.categories.find((category) => category.name === categoryName) || {}).is_locked)
         }))
       };
     })
@@ -3634,6 +3635,50 @@ function SettingsPage() {
     }
   }
 
+  async function toggleCategoryLock(category) {
+    const selectedPillar = pillars.find((pillar) => pillar.id === category.pillar_id);
+    const nextLocked = !Boolean(category.is_locked);
+
+    try {
+      const { error } = await supabase
+        .from("categories")
+        .update({ is_locked: nextLocked })
+        .eq("id", category.id);
+
+      if (error) throw error;
+
+      await logAdminAction({
+        action: nextLocked ? "category_locked" : "category_unlocked",
+        targetType: "category",
+        targetId: category.id,
+        targetName: category.name,
+        details: {
+          is_locked: nextLocked,
+          pillar_id: category.pillar_id,
+          pillar_name: selectedPillar?.name || "",
+          category_name: category.name
+        }
+      });
+
+      setPillars((current) => current.map((pillar) => ({
+        ...pillar,
+        categories: (pillar.categories || []).map((item) =>
+          item.id === category.id ? { ...item, is_locked: nextLocked } : item
+        )
+      })));
+      showToast(nextLocked ? "Subcategory locked successfully." : "Subcategory unlocked successfully.", "success");
+    } catch (err) {
+      await logAdminAction({
+        action: "category_lock_update_failed",
+        targetType: "category",
+        targetId: category.id,
+        targetName: category.name,
+        details: { failure_code: err.code || "CATEGORY_LOCK_UPDATE_FAILED" }
+      });
+      showToast(err.message || "Unable to update subcategory access.", "error");
+    }
+  }
+
   async function confirmDelete(target) {
     if (!target) return false;
 
@@ -3849,6 +3894,17 @@ function SettingsPage() {
                     <div key={category.id} className="settings-list-item">
                       <span>{category.name}</span>
                       <div className="settings-list-actions">
+                        <ConfirmingButton
+                          className={`icon-btn category-lock-btn ${category.is_locked ? "category-lock-locked" : "category-lock-unlocked"}`}
+                          title={category.is_locked ? "Unlock subcategory?" : "Lock subcategory?"}
+                          message={category.is_locked
+                            ? `Unlock "${category.name}" so it can be opened in the mobile app?`
+                            : `Lock "${category.name}" so it cannot be opened in the mobile app until unlocked?`}
+                          actionLabel={category.is_locked ? "Unlock Subcategory" : "Lock Subcategory"}
+                          onConfirm={() => toggleCategoryLock(category)}
+                        >
+                          {category.is_locked ? <Lock size={16} /> : <Unlock size={16} />}
+                        </ConfirmingButton>
                         <button type="button" className="icon-btn" title="Edit category" onClick={() => { setEditingCategoryId(category.id); setCategoryPillarId(selectedPillarData.id); setCategoryName(category.name); }}>
                           <Pencil size={16} />
                         </button>
