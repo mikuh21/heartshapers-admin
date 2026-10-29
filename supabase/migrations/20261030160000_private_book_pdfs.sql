@@ -8,7 +8,7 @@ begin;
 update public.books
 set pdf_url = regexp_replace(
   substring(pdf_url from '/storage/v1/object/public/pdfs/(.*)$'),
-  '\\?.*$',
+  '[?].*$',
   ''
 )
 where pdf_url like '%/storage/v1/object/public/pdfs/%';
