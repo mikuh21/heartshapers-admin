@@ -51,14 +51,20 @@ async function loadGameCoverOptimizationState() {
 }
 
 async function saveGameCoverOptimizationState(state) {
-  const { data: sessionData } = await supabase.auth.getSession();
+  const { data: sessionData, error: sessionError } = await supabase.auth.getSession();
+  const userId = sessionData?.session?.user?.id;
+  if (sessionError || !userId) {
+    const authError = new Error("Your admin session has expired. Sign in again before continuing game-cover optimization.");
+    authError.code = "ADMIN_SESSION_EXPIRED";
+    throw authError;
+  }
   const { error } = await supabase
     .from("app_settings")
     .upsert({
       key: GAME_COVER_OPTIMIZATION_KEY,
       value: state,
       updated_at: new Date().toISOString(),
-      updated_by: sessionData?.session?.user?.id || null
+      updated_by: userId
     }, { onConflict: "key" });
   if (error) throw error;
 }
@@ -811,6 +817,11 @@ export default function GamesPage({ canManageGames, ConfirmModal, showToast }) {
     let active = true;
 
     const runOptimization = async () => {
+      const { data: authData, error: authError } = await supabase.auth.getUser();
+      if (authError || !authData?.user) {
+        showToast("Your admin session has expired. Sign in again before optimizing game covers.", "error");
+        return;
+      }
       let state;
       try {
         state = await loadGameCoverOptimizationState();
@@ -830,6 +841,14 @@ export default function GamesPage({ canManageGames, ConfirmModal, showToast }) {
       if (!candidates.length) return;
 
       setGameCoverOptimizationProgress({ done: 0, total: candidates.length });
+      state = {
+        ...state,
+        optimized: 0,
+        skipped: 0,
+        failed: 0,
+        status: "in_progress",
+        lastRunAt: new Date().toISOString()
+      };
       let optimizedCount = 0;
       let skippedCount = 0;
       const failures = [];
@@ -883,6 +902,11 @@ export default function GamesPage({ canManageGames, ConfirmModal, showToast }) {
             await saveGameCoverOptimizationState(state);
           } catch (stateError) {
             failures.push(`Progress save for ${game.title || game.id}: ${stateError?.message || "Unable to save progress"}`);
+            if (stateError?.code === "ADMIN_SESSION_EXPIRED" || stateError?.status === 401 || stateError?.status === 403) {
+              active = false;
+              showToast("Your admin session expired. Sign in again; failed game covers will remain available for retry.", "error");
+              return;
+            }
           }
           if (active) setGameCoverOptimizationProgress({ done: index + 1, total: candidates.length });
         }
