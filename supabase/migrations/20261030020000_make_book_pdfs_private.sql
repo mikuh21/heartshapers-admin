@@ -5,6 +5,7 @@
 do $$
 declare
   unexpected_count integer;
+  missing_object_count integer;
 begin
   select count(*)
   into unexpected_count
@@ -20,16 +21,52 @@ begin
       'Cannot make pdfs private: % active book PDF references are not recognized Supabase pdfs paths or public URLs.',
       unexpected_count;
   end if;
+
+  -- Validate every active reference against an actual Storage object before
+  -- rewriting any URL or changing bucket visibility. Existing public URLs
+  -- encode spaces as %20, while Storage object names contain literal spaces.
+  select count(*)
+  into missing_object_count
+  from public.books b
+  left join storage.objects o
+    on o.bucket_id = 'pdfs'
+   and o.name = case
+     when b.pdf_url ~* '^https?://[^/]+/storage/v1/object/public/pdfs/'
+       then replace(
+         regexp_replace(
+           b.pdf_url,
+           '^https?://[^/]+/storage/v1/object/public/pdfs/',
+           ''
+         ),
+         '%20',
+         ' '
+       )
+     else b.pdf_url
+   end
+  where b.deleted_at is null
+    and b.pdf_url is not null
+    and btrim(b.pdf_url) <> ''
+    and o.name is null;
+
+  if missing_object_count > 0 then
+    raise exception
+      'Cannot make pdfs private: % active book PDF references do not match an existing Storage object after URL path decoding.',
+      missing_object_count;
+  end if;
 end;
 $$;
 
--- Replace legacy public URLs with their Storage object paths. The bucket's
--- actual object names include the "pdfs/" prefix.
+-- Replace legacy public URLs with their actual Storage object paths. Decode
+-- %20 because Storage object names contain literal spaces, not percent text.
 update public.books
-set pdf_url = regexp_replace(
-  pdf_url,
-  '^https?://[^/]+/storage/v1/object/public/pdfs/',
-  ''
+set pdf_url = replace(
+  regexp_replace(
+    pdf_url,
+    '^https?://[^/]+/storage/v1/object/public/pdfs/',
+    ''
+  ),
+  '%20',
+  ' '
 )
 where pdf_url ~* '^https?://[^/]+/storage/v1/object/public/pdfs/';
 
