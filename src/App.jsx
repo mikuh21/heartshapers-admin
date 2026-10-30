@@ -1289,7 +1289,9 @@ function Books() {
           }
           failures.push(`${book.title || book.id}: ${error?.message || "Unknown error"}`);
         } finally {
-          attemptedBookIds.add(book.id);
+          // Only successful or intentionally skipped items are terminal.
+          // Failed items remain eligible for a retry on the next admin visit.
+          if (outcome !== "failed") attemptedBookIds.add(book.id);
           state = {
             ...state,
             version: 1,
@@ -1312,8 +1314,9 @@ function Books() {
       await loadBooks();
       state = {
         ...state,
-        status: "completed",
-        lastCompletedAt: new Date().toISOString()
+        status: failures.length ? "partial" : "completed",
+        lastCompletedAt: failures.length ? state.lastCompletedAt || null : new Date().toISOString(),
+        lastRunAt: new Date().toISOString()
       };
       try {
         await saveCoverOptimizationState(state);
