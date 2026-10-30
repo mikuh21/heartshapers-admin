@@ -1,5 +1,9 @@
 -- Add entitlement-aware signed access before the PDF bucket is made private.
 -- This migration intentionally does not change bucket visibility or existing URLs.
+--
+-- Keep precedence aligned with the mobile hasBookAccess() implementation:
+-- VIP, purchase, and explicit free grants allow access; an explicit locked
+-- override denies access before the book-level unlocked default is considered.
 
 create or replace function public.can_read_book_pdf(object_name text)
 returns boolean
@@ -24,8 +28,7 @@ as $$
         ) = '/storage/v1/object/sign/pdfs/' || object_name
       )
       and (
-        coalesce(b.is_locked, true) = false
-        or lower(coalesce(auth.jwt() -> 'app_metadata' ->> 'membership_tier', '')) = 'vip'
+        lower(coalesce(auth.jwt() -> 'app_metadata' ->> 'membership_tier', '')) = 'vip'
         or lower(coalesce(auth.jwt() -> 'app_metadata' ->> 'role', '')) in ('admin', 'super_admin')
         or exists (
           select 1
@@ -39,6 +42,16 @@ as $$
           where uba.book_id = b.id
             and uba.user_id = auth.uid()
             and lower(uba.access_status) = 'free'
+        )
+        or (
+          coalesce(b.is_locked, true) = false
+          and not exists (
+            select 1
+            from public.user_book_access uba
+            where uba.book_id = b.id
+              and uba.user_id = auth.uid()
+              and lower(uba.access_status) = 'locked'
+          )
         )
       )
   );
