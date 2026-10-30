@@ -73,14 +73,20 @@ async function loadCoverOptimizationState() {
 }
 
 async function saveCoverOptimizationState(state) {
-  const { data: sessionData } = await supabase.auth.getSession();
+  const { data: sessionData, error: sessionError } = await supabase.auth.getSession();
+  const userId = sessionData?.session?.user?.id;
+  if (sessionError || !userId) {
+    const authError = new Error("Your admin session has expired. Sign in again before continuing cover optimization.");
+    authError.code = "ADMIN_SESSION_EXPIRED";
+    throw authError;
+  }
   const { error } = await supabase
     .from("app_settings")
     .upsert({
       key: COVER_OPTIMIZATION_SETTING_KEY,
       value: state,
       updated_at: new Date().toISOString(),
-      updated_by: sessionData?.session?.user?.id || null
+      updated_by: userId
     }, { onConflict: "key" });
   if (error) throw error;
 }
@@ -1220,6 +1226,11 @@ function Books() {
   });
 
   async function optimizeExistingCovers() {
+    const { data: authData, error: authError } = await supabase.auth.getUser();
+    if (authError || !authData?.user) {
+      showToast("Your admin session has expired. Sign in again before optimizing book covers.", "error");
+      return false;
+    }
     let state;
     try {
       state = await loadCoverOptimizationState();
@@ -1238,12 +1249,44 @@ function Books() {
         && !attemptedBookIds.has(book.id);
     });
     if (!candidates.length) {
-      showToast("No unprocessed book covers need optimization.", "info");
+      const optimizedBooks = books.filter((book) => {
+        const url = String(book.cover_image_url || "").toLowerCase();
+        return url.includes("/optimized/") || url.endsWith(".webp");
+      });
+      if (optimizedBooks.length === books.length && books.length > 0) {
+        const reconciledState = {
+          ...state,
+          version: 1,
+          attemptedBookIds: optimizedBooks.map((book) => book.id),
+          optimized: optimizedBooks.length,
+          skipped: 0,
+          failed: 0,
+          status: "completed",
+          lastReconciledAt: new Date().toISOString(),
+          reconciledFromCurrentBookRecords: true
+        };
+        try {
+          await saveCoverOptimizationState(reconciledState);
+          showToast(`Cover optimization tracker reconciled: ${optimizedBooks.length} existing optimized covers. No files were changed.`, "success");
+        } catch (reconcileError) {
+          showToast(reconcileError?.message || "Unable to reconcile the cover optimization tracker.", "error");
+        }
+      } else {
+        showToast("No unprocessed book covers need optimization.", "info");
+      }
       return true;
     }
 
     setOptimizingCovers(true);
     setCoverOptimizationProgress({ done: 0, total: candidates.length });
+    state = {
+      ...state,
+      optimized: 0,
+      skipped: 0,
+      failed: 0,
+      status: "in_progress",
+      lastRunAt: new Date().toISOString()
+    };
     let optimizedCount = 0;
     let skippedCount = 0;
     const failures = [];
@@ -1306,6 +1349,10 @@ function Books() {
             await saveCoverOptimizationState(state);
           } catch (stateError) {
             failures.push(`Progress save for ${book.title || book.id}: ${stateError?.message || "Unable to save progress"}`);
+            if (stateError?.code === "ADMIN_SESSION_EXPIRED" || stateError?.status === 401 || stateError?.status === 403) {
+              showToast("Your admin session expired. Sign in again; failed book covers will remain available for retry.", "error");
+              return false;
+            }
           }
           setCoverOptimizationProgress({ done: index + 1, total: candidates.length });
         }
