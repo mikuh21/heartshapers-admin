@@ -1350,7 +1350,8 @@ function Books() {
           } catch (stateError) {
             failures.push(`Progress save for ${book.title || book.id}: ${stateError?.message || "Unable to save progress"}`);
             if (stateError?.code === "ADMIN_SESSION_EXPIRED" || stateError?.status === 401 || stateError?.status === 403) {
-              throw stateError;
+              showToast("Your admin session expired. Sign in again; failed book covers will remain available for retry.", "error");
+              return false;
             }
           }
           setCoverOptimizationProgress({ done: index + 1, total: candidates.length });
