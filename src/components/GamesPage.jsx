@@ -867,7 +867,8 @@ export default function GamesPage({ canManageGames, ConfirmModal, showToast }) {
           failures.push(`${game.title || game.id}: ${error?.message || "Unknown error"}`);
           // Keep uploaded files rather than risk deleting an object after an uncertain database update.
         } finally {
-          attempted.add(game.id);
+          // Failed items remain eligible for a retry on the next Games page visit.
+          if (outcome !== "failed") attempted.add(game.id);
           state = {
             ...state,
             version: 1,
@@ -887,7 +888,12 @@ export default function GamesPage({ canManageGames, ConfirmModal, showToast }) {
         }
       }
 
-      state = { ...state, status: "completed", lastCompletedAt: new Date().toISOString() };
+      state = {
+        ...state,
+        status: failures.length ? "partial" : "completed",
+        lastCompletedAt: failures.length ? state.lastCompletedAt || null : new Date().toISOString(),
+        lastRunAt: new Date().toISOString()
+      };
       try { await saveGameCoverOptimizationState(state); }
       catch (error) { console.error("Unable to save final game-cover optimization status.", error); }
       await logAdminAction({
