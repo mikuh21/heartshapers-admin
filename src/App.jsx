@@ -99,7 +99,7 @@ async function optimizeBookCover(file) {
   let bitmap;
   try {
     bitmap = await createImageBitmap(file);
-    const maxDimension = 1600;
+    const maxDimension = 1200;
     const scale = Math.min(1, maxDimension / Math.max(bitmap.width, bitmap.height));
     if (scale === 1 && file.size <= 350 * 1024) {
       return file;
@@ -113,7 +113,7 @@ async function optimizeBookCover(file) {
     context.drawImage(bitmap, 0, 0, canvas.width, canvas.height);
 
     const optimizedBlob = await new Promise((resolve) => {
-      canvas.toBlob(resolve, "image/webp", 0.82);
+      canvas.toBlob(resolve, "image/webp", 0.74);
     });
     if (!optimizedBlob || optimizedBlob.size >= file.size) {
       return file;
@@ -143,7 +143,7 @@ async function optimizeExistingCoverUrl(url) {
   let bitmap;
   try {
     bitmap = await createImageBitmap(sourceBlob);
-    const maxDimension = 1400;
+    const maxDimension = 1000;
     const scale = Math.min(1, maxDimension / Math.max(bitmap.width, bitmap.height));
     const canvas = document.createElement("canvas");
     canvas.width = Math.max(1, Math.round(bitmap.width * scale));
@@ -151,9 +151,9 @@ async function optimizeExistingCoverUrl(url) {
     const context = canvas.getContext("2d");
     if (!context) throw new Error("Unable to initialize the image optimizer.");
     context.drawImage(bitmap, 0, 0, canvas.width, canvas.height);
-    const optimizedBlob = await new Promise((resolve) => canvas.toBlob(resolve, "image/webp", 0.78));
+    const optimizedBlob = await new Promise((resolve) => canvas.toBlob(resolve, "image/webp", 0.68));
     if (!optimizedBlob) throw new Error("The browser could not encode the optimized cover.");
-    if (optimizedBlob.size >= sourceBlob.size * 0.9) {
+    if (optimizedBlob.size >= sourceBlob.size * 0.95) {
       return { blob: null, originalBytes: sourceBlob.size, optimizedBytes: optimizedBlob.size };
     }
     return { blob: optimizedBlob, originalBytes: sourceBlob.size, optimizedBytes: optimizedBlob.size };
