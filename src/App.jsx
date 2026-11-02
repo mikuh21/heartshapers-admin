@@ -1240,6 +1240,37 @@ function Books() {
       return false;
     }
 
+    // Recover legacy tracker records written before failed covers were kept retryable.
+    // Older records cannot distinguish failed attempts from intentionally skipped covers,
+    // so re-queue only still-original URLs once; optimized URLs remain excluded below.
+    if (
+      !state.lastRunCounts
+      && (Number(state.failed) || 0) > 0
+      && !state.legacyRetryReconciledAt
+    ) {
+      state = {
+        ...state,
+        attemptedBookIds: [],
+        lastRunCounts: { optimized: 0, skipped: 0, failed: 0 },
+        legacyRetryReconciledAt: new Date().toISOString(),
+        legacyRetryReconciliation: "cleared-terminal-tracker-for-original-cover-urls"
+      };
+      try {
+        await saveCoverOptimizationState(state);
+        showToast(
+          "Recovered legacy cover retry records. Existing optimized covers are preserved; original cover URLs are now eligible for a one-time retry.",
+          "info"
+        );
+      } catch (reconcileError) {
+        console.error("Unable to save legacy cover retry reconciliation.", reconcileError);
+        showToast(
+          reconcileError?.message || "Unable to save the cover retry recovery state.",
+          "error"
+        );
+        return false;
+      }
+    }
+
     const attemptedBookIds = new Set(state.attemptedBookIds);
     const candidates = books.filter((book) => {
       const url = book.cover_image_url || "";
