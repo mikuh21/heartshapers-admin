@@ -141,7 +141,7 @@ export async function createPdfGame(gameData, coverFile, sourcePdfFile, pageFile
     for (let index = 0; index < pageFiles.length; index += 1) {
       const { pageNumber, blob } = pageFiles[index];
       const optimizedPage = await optimizePdfCardPageBlob(blob);
-      const path = `games/${gameData.id}/cards/page-${String(index + 1).padStart(4, "0")}.\${optimizedPage.extension}`;
+      const path = `games/${gameData.id}/cards/page-${String(index + 1).padStart(4, "0")}.${optimizedPage.extension}`;
       const { error: pageError } = await supabase.storage
         .from("game-assets")
         .upload(path, optimizedPage.blob, { contentType: optimizedPage.contentType, cacheControl: "31536000", upsert: false });
