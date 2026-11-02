@@ -32,6 +32,30 @@ async function optimizeGameCoverFile(file) {
   }
 }
 
+async function optimizePdfCardPageBlob(blob) {
+  if (!blob || typeof createImageBitmap !== "function" || typeof document === "undefined") {
+    return { blob, extension: "png", contentType: "image/png" };
+  }
+  let bitmap;
+  try {
+    bitmap = await createImageBitmap(blob);
+    const canvas = document.createElement("canvas");
+    canvas.width = Math.max(1, bitmap.width);
+    canvas.height = Math.max(1, bitmap.height);
+    const context = canvas.getContext("2d");
+    if (!context) return { blob, extension: "png", contentType: "image/png" };
+    context.drawImage(bitmap, 0, 0, canvas.width, canvas.height);
+    const webp = await new Promise((resolve) => canvas.toBlob(resolve, "image/webp", 0.78));
+    if (!webp || webp.size >= blob.size) return { blob, extension: "png", contentType: "image/png" };
+    return { blob: webp, extension: "webp", contentType: "image/webp" };
+  } catch (error) {
+    console.warn("PDF card page optimization skipped; uploading the original PNG.", error);
+    return { blob, extension: "png", contentType: "image/png" };
+  } finally {
+    bitmap?.close?.();
+  }
+}
+
 function getGameCoverExtension(file) {
   return {
     "image/jpeg": "jpg",
@@ -116,10 +140,11 @@ export async function createPdfGame(gameData, coverFile, sourcePdfFile, pageFile
     const cardRows = [];
     for (let index = 0; index < pageFiles.length; index += 1) {
       const { pageNumber, blob } = pageFiles[index];
-      const path = `games/${gameData.id}/cards/page-${String(index + 1).padStart(4, "0")}.png`;
+      const optimizedPage = await optimizePdfCardPageBlob(blob);
+      const path = `games/${gameData.id}/cards/page-${String(index + 1).padStart(4, "0")}.\${optimizedPage.extension}`;
       const { error: pageError } = await supabase.storage
         .from("game-assets")
-        .upload(path, blob, { contentType: "image/png", cacheControl: "31536000", upsert: false });
+        .upload(path, optimizedPage.blob, { contentType: optimizedPage.contentType, cacheControl: "31536000", upsert: false });
       if (pageError) throw describeGameStorageUploadError(pageError, uploadLimit);
       uploadedPaths.push(path);
       cardRows.push({
