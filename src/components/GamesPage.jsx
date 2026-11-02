@@ -80,7 +80,7 @@ async function optimizeExistingGameCover(url) {
   let bitmap;
   try {
     bitmap = await createImageBitmap(sourceBlob);
-    const maxDimension = 1200;
+    const maxDimension = 900;
     const scale = Math.min(1, maxDimension / Math.max(bitmap.width, bitmap.height));
     const canvas = document.createElement("canvas");
     canvas.width = Math.max(1, Math.round(bitmap.width * scale));
@@ -88,9 +88,9 @@ async function optimizeExistingGameCover(url) {
     const context = canvas.getContext("2d");
     if (!context) throw new Error("Unable to initialize the image optimizer.");
     context.drawImage(bitmap, 0, 0, canvas.width, canvas.height);
-    const blob = await new Promise((resolve) => canvas.toBlob(resolve, "image/webp", 0.78));
+    const blob = await new Promise((resolve) => canvas.toBlob(resolve, "image/webp", 0.70));
     if (!blob) throw new Error("The browser could not encode the optimized cover.");
-    return blob.size < sourceBlob.size * 0.9 ? blob : null;
+    return blob.size < sourceBlob.size * 0.95 ? blob : null;
   } finally {
     bitmap?.close?.();
   }
