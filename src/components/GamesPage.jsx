@@ -497,8 +497,7 @@ function GameCoverFrame({ src, className = "" }) {
     >
       {hasCover
         ? <img
-            src={src}
-            alt=""
+            src={src}            alt=""
             onLoad={(event) => {
               const { naturalWidth, naturalHeight } = event.currentTarget;
               if (naturalWidth > 0 && naturalHeight > 0) {
@@ -997,8 +996,7 @@ export default function GamesPage({ canManageGames, ConfirmModal, showToast }) {
     };
 
     void runOptimization();
-    return () => { active = false; };
-  }, [games, loading, showToast]);
+    return () => { active = false; };  }, [games, loading, showToast]);
 
   const pdfCardImageOptimizationStartedRef = useRef(false);
   const [pdfCardImageOptimizationProgress, setPdfCardImageOptimizationProgress] = useState(null);
@@ -1030,7 +1028,9 @@ export default function GamesPage({ canManageGames, ConfirmModal, showToast }) {
         console.error("Unable to list PDF card image assets for optimization.", cardsError);
         return;
       }
+      const activeGameIds = new Set(games.map((game) => game.id));
       const candidates = (cards || []).filter((card) => {
+        if (!activeGameIds.has(card.game_id)) return false;
         const metadata = card.metadata && typeof card.metadata === "object" && !Array.isArray(card.metadata)
           ? card.metadata : {};
         const path = String(metadata.pdf_page_path || "");
@@ -1497,8 +1497,7 @@ function GameUserAccessModal({ game, onClose, showToast, ConfirmModal }) {
         <div className="user-access-content">
           {loading ? (
             <div className="empty-state small-empty"><Loader2 className="spin" size={18} /> Loading user access...</div>
-          ) : loadError ? (
-            <div className="empty-state small-empty">Access data is unavailable. Close and reopen this dialog to retry.</div>
+          ) : loadError ? (            <div className="empty-state small-empty">Access data is unavailable. Close and reopen this dialog to retry.</div>
           ) : users.length === 0 ? (
             <div className="empty-state small-empty">No registered users found.</div>
           ) : (
@@ -1997,8 +1996,7 @@ function AddGameModal({
                 </section>
 
                 <section className="pdf-game-step-section">
-                  <h4>Step 3 — Upload Game Content PDF</h4>
-                  <div className="pdf-game-file-control">
+                  <h4>Step 3 — Upload Game Content PDF</h4>                  <div className="pdf-game-file-control">
                     <label className="pdf-game-upload" htmlFor="new-game-pdf">
                       <FileText size={18} />
                       <span>{pdfFile ? `Replace PDF · ${pdfFile.name}` : isEditing ? "Choose a replacement PDF (optional)" : <>Choose Game Content PDF <span className="required-marker">*</span></>}</span>
