@@ -96,6 +96,62 @@ async function optimizeExistingGameCover(url) {
   }
 }
 
+const PDF_CARD_IMAGE_OPTIMIZATION_KEY = "pdf_game_card_image_optimization_v1";
+
+async function loadPdfCardImageOptimizationState() {
+  const { data, error } = await supabase.from("app_settings").select("value")
+    .eq("key", PDF_CARD_IMAGE_OPTIMIZATION_KEY).maybeSingle();
+  if (error) throw error;
+  const value = data?.value;
+  return value && typeof value === "object" && Array.isArray(value.attemptedCardIds)
+    ? value
+    : { version: 1, attemptedCardIds: [], optimized: 0, skipped: 0, failed: 0 };
+}
+
+async function savePdfCardImageOptimizationState(state) {
+  const { data: sessionData, error: sessionError } = await supabase.auth.getSession();
+  const userId = sessionData?.session?.user?.id;
+  if (sessionError || !userId) {
+    const error = new Error("Your admin session has expired. Sign in again before continuing PDF card image optimization.");
+    error.code = "ADMIN_SESSION_EXPIRED";
+    throw error;
+  }
+  const { error } = await supabase.from("app_settings").upsert({
+    key: PDF_CARD_IMAGE_OPTIMIZATION_KEY,
+    value: state,
+    updated_at: new Date().toISOString(),
+    updated_by: userId
+  }, { onConflict: "key" });
+  if (error) throw error;
+}
+
+async function optimizeExistingPdfCardImage(url) {
+  if (!url || typeof createImageBitmap !== "function" || typeof document === "undefined") {
+    throw new Error("This browser does not support PDF card image optimization.");
+  }
+  const response = await fetch(url);
+  if (!response.ok) throw new Error(`Unable to download card image (HTTP ${response.status}).`);
+  const sourceBlob = await response.blob();
+  if (!sourceBlob.type.startsWith("image/")) throw new Error("The card image URL did not return an image.");
+  if (sourceBlob.type === "image/webp") return null;
+  let bitmap;
+  try {
+    bitmap = await createImageBitmap(sourceBlob);
+    // Preserve the existing card dimensions for legibility; only change encoding.
+    const canvas = document.createElement("canvas");
+    canvas.width = Math.max(1, bitmap.width);
+    canvas.height = Math.max(1, bitmap.height);
+    const context = canvas.getContext("2d");
+    if (!context) throw new Error("Unable to initialize the card image optimizer.");
+    context.drawImage(bitmap, 0, 0, canvas.width, canvas.height);
+    const blob = await new Promise((resolve) => canvas.toBlob(resolve, "image/webp", 0.78));
+    if (!blob) throw new Error("The browser could not encode the optimized card image.");
+    return blob.size <= sourceBlob.size * 0.85 ? blob : null;
+  } finally {
+    bitmap?.close?.();
+  }
+}
+
 function ConfirmingForm({ children, onConfirm, ConfirmModal, title, message, actionLabel = "Save Changes", shouldConfirm = true, ...formProps }) {
   const [open, setOpen] = useState(false);
   const [submitting, setSubmitting] = useState(false);
@@ -441,8 +497,7 @@ function GameCoverFrame({ src, className = "" }) {
     >
       {hasCover
         ? <img
-            src={src}
-            alt=""
+            src={src}            alt=""
             onLoad={(event) => {
               const { naturalWidth, naturalHeight } = event.currentTarget;
               if (naturalWidth > 0 && naturalHeight > 0) {
@@ -498,7 +553,6 @@ function getCardEditorForm(game, card) {
   const source = metadata.source_card && typeof metadata.source_card === "object"
     ? metadata.source_card
     : {};
-
   switch (game.game_type) {
     case "bible_action":
       return { pairs: makePairs(pairs, 4) };
@@ -942,6 +996,157 @@ export default function GamesPage({ canManageGames, ConfirmModal, showToast }) {
     };
 
     void runOptimization();
+    return () => { active = false; };  }, [games, loading, showToast]);
+
+  const pdfCardImageOptimizationStartedRef = useRef(false);
+  const [pdfCardImageOptimizationProgress, setPdfCardImageOptimizationProgress] = useState(null);
+
+  useEffect(() => {
+    if (loading || !games.length || pdfCardImageOptimizationStartedRef.current) return undefined;
+    pdfCardImageOptimizationStartedRef.current = true;
+    let active = true;
+
+    const runOptimization = async () => {
+      const { data: authData, error: authError } = await supabase.auth.getUser();
+      if (authError || !authData?.user) {
+        showToast("Your admin session has expired. Sign in again before optimizing PDF card images.", "error");
+        return;
+      }
+
+      let state;
+      try {
+        state = await loadPdfCardImageOptimizationState();
+      } catch (stateError) {
+        console.error("Unable to read persistent PDF card image optimization state.", stateError);
+        return;
+      }
+      const attempted = new Set(state.attemptedCardIds);
+      const { data: cards, error: cardsError } = await supabase
+        .from("game_cards")
+        .select("id,game_id,sort_order,metadata");
+      if (cardsError) {
+        console.error("Unable to list PDF card image assets for optimization.", cardsError);
+        return;
+      }
+      const activeGameIds = new Set(games.map((game) => game.id));
+      const candidates = (cards || []).filter((card) => {
+        if (!activeGameIds.has(card.game_id)) return false;
+        const metadata = card.metadata && typeof card.metadata === "object" && !Array.isArray(card.metadata)
+          ? card.metadata : {};
+        const path = String(metadata.pdf_page_path || "");
+        return metadata.content_type === "pdf_page"
+          && path.startsWith(`games/${card.game_id}/cards/`)
+          && !path.toLowerCase().endsWith(".webp")
+          && !attempted.has(card.id);
+      });
+      if (!candidates.length) return;
+
+      setPdfCardImageOptimizationProgress({ done: 0, total: candidates.length });
+      state = {
+        ...state,
+        lastRunCounts: { optimized: 0, skipped: 0, failed: 0 },
+        status: "in_progress",
+        lastRunAt: new Date().toISOString()
+      };
+      let optimizedCount = 0;
+      let skippedCount = 0;
+      const failures = [];
+
+      for (let index = 0; index < candidates.length; index += 1) {
+        if (!active) return;
+        const card = candidates[index];
+        const metadata = card.metadata && typeof card.metadata === "object" && !Array.isArray(card.metadata)
+          ? card.metadata : {};
+        const oldPath = metadata.pdf_page_path;
+        let outcome = "failed";
+        try {
+          const { data: signedData, error: signedError } = await supabase.storage
+            .from("game-assets").createSignedUrl(oldPath, 300);
+          if (signedError || !signedData?.signedUrl) {
+            throw signedError || new Error("Unable to resolve a temporary card image URL.");
+          }
+          const blob = await optimizeExistingPdfCardImage(signedData.signedUrl);
+          if (!blob) {
+            skippedCount += 1;
+            outcome = "skipped";
+          } else {
+            const uploadedPath = `games/${card.game_id}/cards/optimized-${card.id}-${Date.now()}.webp`;
+            const { error: uploadError } = await supabase.storage.from("game-assets").upload(uploadedPath, blob, {
+              contentType: "image/webp",
+              cacheControl: "31536000",
+              upsert: false
+            });
+            if (uploadError) throw uploadError;
+
+            const nextMetadata = { ...metadata, pdf_page_path: uploadedPath };
+            const { data, error: updateError } = await supabase.from("game_cards")
+              .update({ metadata: nextMetadata })
+              .eq("id", card.id)
+              .eq("game_id", card.game_id)
+              .eq("metadata", metadata)
+              .select("id")
+              .maybeSingle();
+            if (updateError) throw updateError;
+            if (!data) throw new Error("Card metadata changed during optimization; the original asset remains active.");
+            optimizedCount += 1;
+            outcome = "optimized";
+          }
+        } catch (optimizationError) {
+          failures.push(`Game ${card.game_id}, card ${card.sort_order}: ${optimizationError?.message || "Unknown error"}`);
+          // Do not delete the uploaded asset after uncertain database outcomes.
+        } finally {
+          if (outcome !== "failed") attempted.add(card.id);
+          state = {
+            ...state,
+            version: 1,
+            attemptedCardIds: [...attempted],
+            optimized: (Number(state.optimized) || 0) + (outcome === "optimized" ? 1 : 0),
+            skipped: (Number(state.skipped) || 0) + (outcome === "skipped" ? 1 : 0),
+            failed: (Number(state.failed) || 0) + (outcome === "failed" ? 1 : 0),
+            lastRunCounts: {
+              optimized: (Number(state.lastRunCounts?.optimized) || 0) + (outcome === "optimized" ? 1 : 0),
+              skipped: (Number(state.lastRunCounts?.skipped) || 0) + (outcome === "skipped" ? 1 : 0),
+              failed: (Number(state.lastRunCounts?.failed) || 0) + (outcome === "failed" ? 1 : 0)
+            },
+            lastAttemptAt: new Date().toISOString(),
+            status: "in_progress"
+          };
+          try {
+            await savePdfCardImageOptimizationState(state);
+          } catch (progressError) {
+            failures.push(`Progress save for card ${card.id}: ${progressError?.message || "Unable to save progress"}`);
+            if (progressError?.code === "ADMIN_SESSION_EXPIRED" || progressError?.status === 401 || progressError?.status === 403) {
+              active = false;
+              showToast("Your admin session expired. Sign in again; failed PDF card images remain eligible for retry.", "error");
+              return;
+            }
+          }
+          if (active) setPdfCardImageOptimizationProgress({ done: index + 1, total: candidates.length });
+        }
+      }
+
+      state = {
+        ...state,
+        status: failures.length ? "partial" : "completed",
+        lastCompletedAt: failures.length ? state.lastCompletedAt || null : new Date().toISOString(),
+        lastRunAt: new Date().toISOString()
+      };
+      try { await savePdfCardImageOptimizationState(state); }
+      catch (saveError) { console.error("Unable to save final PDF card image optimization status.", saveError); }
+
+      if (failures.length) {
+        console.error("Some PDF game card images could not be optimized:", failures);
+        showToast(`PDF card image optimization finished: ${optimizedCount} optimized, ${skippedCount} skipped, ${failures.length} failed. See console for details.`, "warning");
+      } else {
+        showToast(`PDF card image optimization finished: ${optimizedCount} optimized, ${skippedCount} skipped.`, "success");
+      }
+      if (active) {
+        setPdfCardImageOptimizationProgress(null);
+        setRefreshKey((current) => current + 1);
+      }
+    };
+
+    void runOptimization();
     return () => { active = false; };
   }, [games, loading, showToast]);
 
@@ -997,8 +1202,7 @@ export default function GamesPage({ canManageGames, ConfirmModal, showToast }) {
     return <div className="settings-card access-card"><h3>Access denied</h3><p className="muted">You do not have permission to manage games.</p></div>;
   }
 
-  return (
-    <>
+  return (    <>
       <div className="page-heading">
         <div>
           <h3>Games</h3>
@@ -1006,6 +1210,11 @@ export default function GamesPage({ canManageGames, ConfirmModal, showToast }) {
           {gameCoverOptimizationProgress && (
             <p className="muted" role="status">
               Optimizing existing game covers ({gameCoverOptimizationProgress.done}/{gameCoverOptimizationProgress.total})…
+            </p>
+          )}
+          {pdfCardImageOptimizationProgress && (
+            <p className="muted" role="status">
+              Optimizing existing PDF game card images ({pdfCardImageOptimizationProgress.done}/{pdfCardImageOptimizationProgress.total})…
             </p>
           )}
         </div>
@@ -1288,8 +1497,7 @@ function GameUserAccessModal({ game, onClose, showToast, ConfirmModal }) {
         <div className="user-access-content">
           {loading ? (
             <div className="empty-state small-empty"><Loader2 className="spin" size={18} /> Loading user access...</div>
-          ) : loadError ? (
-            <div className="empty-state small-empty">Access data is unavailable. Close and reopen this dialog to retry.</div>
+          ) : loadError ? (            <div className="empty-state small-empty">Access data is unavailable. Close and reopen this dialog to retry.</div>
           ) : users.length === 0 ? (
             <div className="empty-state small-empty">No registered users found.</div>
           ) : (
@@ -1497,7 +1705,6 @@ function AddGameModal({
     setCoverFile(file);
     setErrors((current) => ({ ...current, cover: "" }));
   }
-
   async function loadPdfPreview(file, initialSelection = null) {
     const loadId = ++pdfLoadIdRef.current;
     setPdfLoading(true);
@@ -1789,8 +1996,7 @@ function AddGameModal({
                 </section>
 
                 <section className="pdf-game-step-section">
-                  <h4>Step 3 — Upload Game Content PDF</h4>
-                  <div className="pdf-game-file-control">
+                  <h4>Step 3 — Upload Game Content PDF</h4>                  <div className="pdf-game-file-control">
                     <label className="pdf-game-upload" htmlFor="new-game-pdf">
                       <FileText size={18} />
                       <span>{pdfFile ? `Replace PDF · ${pdfFile.name}` : isEditing ? "Choose a replacement PDF (optional)" : <>Choose Game Content PDF <span className="required-marker">*</span></>}</span>
@@ -1997,8 +2203,7 @@ function GameDetailsModal({ game, gameUploadLimit, uploadLimitError, onClose, on
       }
 
       if (accessResult.status === "fulfilled" &&
-          typeof accessResult.value?.is_locked === "boolean") {
-        setForm((current) => ({
+          typeof accessResult.value?.is_locked === "boolean") {        setForm((current) => ({
           ...current,
           is_locked: accessResult.value.is_locked
         }));
