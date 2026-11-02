@@ -1667,7 +1667,7 @@ function AddGameModal({
           const page = await pdfDocument.getPage(pageNumber);
           pageFiles.push({
             pageNumber,
-            blob: await renderPdfPage(page, 2000, "image/png")
+            blob: await renderPdfPage(page, 1600, "image/png")
           });
         }
       }
