@@ -1281,9 +1281,7 @@ function Books() {
     setCoverOptimizationProgress({ done: 0, total: candidates.length });
     state = {
       ...state,
-      optimized: 0,
-      skipped: 0,
-      failed: 0,
+      lastRunCounts: { optimized: 0, skipped: 0, failed: 0 },
       status: "in_progress",
       lastRunAt: new Date().toISOString()
     };
@@ -1342,6 +1340,11 @@ function Books() {
             optimized: (Number(state.optimized) || 0) + (outcome === "optimized" ? 1 : 0),
             skipped: (Number(state.skipped) || 0) + (outcome === "skipped" ? 1 : 0),
             failed: (Number(state.failed) || 0) + (outcome === "failed" ? 1 : 0),
+            lastRunCounts: {
+              optimized: (Number(state.lastRunCounts?.optimized) || 0) + (outcome === "optimized" ? 1 : 0),
+              skipped: (Number(state.lastRunCounts?.skipped) || 0) + (outcome === "skipped" ? 1 : 0),
+              failed: (Number(state.lastRunCounts?.failed) || 0) + (outcome === "failed" ? 1 : 0)
+            },
             lastAttemptAt: new Date().toISOString(),
             status: "in_progress"
           };
