@@ -178,3 +178,14 @@ export async function updateFirebaseGameCover(gameId, currentCoverPath, nextCove
   await updateDoc(gameRef, { cover_image_url: nextCoverPath, updated_at: serverTimestamp() });
   return { id: gameId };
 }
+
+export async function updateFirebaseGameCardMetadata(gameId, cardId, currentMetadata, nextMetadata) {
+  const cardRef = doc(firestore, "games", gameId, "game_cards", cardId);
+  const snapshot = await getDoc(cardRef);
+  if (!snapshot.exists()) throw new Error("The game card could not be found.");
+  if (JSON.stringify(snapshot.data().metadata || {}) !== JSON.stringify(currentMetadata || {})) {
+    throw new Error("Card metadata changed during optimization; the original asset remains active.");
+  }
+  await updateDoc(cardRef, { metadata: nextMetadata, updated_at: serverTimestamp() });
+  return { id: cardId };
+}
