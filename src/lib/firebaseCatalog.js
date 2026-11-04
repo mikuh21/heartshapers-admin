@@ -8,7 +8,6 @@ import {
   setDoc,
   updateDoc,
   serverTimestamp,
-  where,
 } from "firebase/firestore";
 import { getDownloadURL, ref, uploadBytes } from "firebase/storage";
 import { firestore, firebaseStorage } from "./firebase";
