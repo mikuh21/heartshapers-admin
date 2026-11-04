@@ -232,13 +232,7 @@ async function savePaymentSettingsToSupabase(settings) {
 }
 
 async function loadAdminLogs() {
-  const { data, error } = await supabase
-    .from("admin_logs")
-    .select("id, action, details, admin_email, created_at")
-    .order("created_at", { ascending: false });
-
-  if (error) throw error;
-  return data || [];
+  return listAdminAuditLogs();
 }
 
 function formatAdminLogAction(action = "") {
