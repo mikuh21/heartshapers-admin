@@ -216,14 +216,8 @@ async function saveUploadSettingsToSupabase(settings) {
 }
 
 async function loadPaymentSettings() {
-  const { data, error } = await supabase
-    .from("app_settings")
-    .select("value")
-    .eq("key", "payment_settings")
-    .maybeSingle();
-
-  if (error) throw error;
-  const loaded = { ...DEFAULT_PAYMENT_SETTINGS, ...(data?.value || {}) };
+  const { value } = await getAdminSetting("payment_settings");
+  const loaded = { ...DEFAULT_PAYMENT_SETTINGS, ...(value || {}) };
   const qrPaths = Array.isArray(loaded.qr_image_urls) ? loaded.qr_image_urls.filter(Boolean) : [];
   if (qrPaths.length === 0 && loaded.qr_image_url) qrPaths.push(loaded.qr_image_url);
   loaded.qr_image_urls = [...new Set(qrPaths)];
@@ -232,23 +226,8 @@ async function loadPaymentSettings() {
 }
 
 async function savePaymentSettingsToSupabase(settings) {
-  const { data: userData } = await supabase.auth.getUser();
   const normalized = { ...DEFAULT_PAYMENT_SETTINGS, ...settings, payment_method: "gcash" };
-  const { error } = await supabase
-    .from("app_settings")
-    .upsert(
-      {
-        key: "payment_settings",
-        value: normalized,
-        updated_at: new Date().toISOString(),
-        updated_by: userData.user?.id || null
-      },
-      {
-        onConflict: "key"
-      }
-    );
-
-  if (error) throw error;
+  await setAdminSetting("payment_settings", normalized);
   return normalized;
 }
 
