@@ -10,7 +10,7 @@ import {
   serverTimestamp
 } from "firebase/firestore";
 import { firestore } from "./firebase";
-import { getFirebaseAssetDownloadUrl } from "./firebaseAssetStorage";
+import { getFirebaseAssetDownloadUrl, uploadFirebaseAsset } from "./firebaseAssetStorage";
 
 /**
  * Firebase-first Games catalog reads. Collection IDs and document IDs intentionally
