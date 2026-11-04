@@ -66,6 +66,11 @@ const DEFAULT_BOOK_AUTHOR = "Compiled and Edited by HEARTSHAPERS";
 
 const COVER_OPTIMIZATION_SETTING_KEY = "cover_optimization_v1";
 
+function isOptimizedBookCoverUrl(value) {
+  const url = String(value || "").toLowerCase();
+  return url.includes("/optimized/") || url.includes("optimized%2f") || /\\.webp(?:[?#]|$)/.test(url);
+}
+
 async function loadCoverOptimizationState() {
   const { data, error } = await supabase
     .from("app_settings")
@@ -1314,14 +1319,13 @@ function Books() {
     const candidates = books.filter((book) => {
       const url = book.cover_image_url || "";
       return url
-        && !url.includes("/optimized/")
-        && !url.toLowerCase().endsWith(".webp")
+        && !isOptimizedBookCoverUrl(url)
         && !attemptedBookIds.has(book.id);
     });
     if (!candidates.length) {
       const optimizedBooks = books.filter((book) => {
         const url = String(book.cover_image_url || "").toLowerCase();
-        return url.includes("/optimized/") || url.endsWith(".webp");
+        return isOptimizedBookCoverUrl(url);
       });
       if (optimizedBooks.length === books.length && books.length > 0) {
         const reconciledState = {
