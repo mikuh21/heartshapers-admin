@@ -1087,8 +1087,7 @@ function Books() {
   });
 
   async function optimizeExistingCovers() {
-    const { data: authData, error: authError } = await supabase.auth.getUser();
-    if (authError || !authData?.user) {
+    if (!firebaseAuth.currentUser) {
       showToast("Your admin session has expired. Sign in again before optimizing book covers.", "error");
       return false;
     }
