@@ -2167,7 +2167,7 @@ function GameDetailsModal({ game, gameUploadLimit, uploadLimitError, onClose, on
     setAccessLoaded(false);
     setLoadErrors({});
     Promise.allSettled([
-      loadGameDetails(game.id),
+      loadFirebaseGameDetails(game.id),
       loadFirebaseGameAccess(game.id)
     ]).then(async ([detailsResult, accessResult]) => {
       const errors = {};
