@@ -44,12 +44,12 @@ export function getAuthRole(user) {
     user.role
   ];
 
-  for (const value of sources) {
-    const normalized = extractRoleValue(value);
-    if (normalized) return normalized;
-  }
-
-  return null;
+  const normalizedRoles = sources
+    .flatMap((value) => Array.isArray(value) ? value : [value])
+    .map((value) => String(value || "").trim().toLowerCase())
+    .filter(Boolean);
+  if (normalizedRoles.includes("super_admin")) return "super_admin";
+  return normalizedRoles.find(Boolean) || null;
 }
 
 function normalizeUser(rawUser = {}) {
