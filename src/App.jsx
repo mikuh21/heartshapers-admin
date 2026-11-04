@@ -33,7 +33,7 @@ import { supabase, COVER_BUCKET, PDF_BUCKET } from "./lib/supabase";
 import { getFunctions, httpsCallable } from "firebase/functions";
 import { ref as firebaseStorageRef, getDownloadURL } from "firebase/storage";
 import { firebaseApp, firebaseAuth, firebaseStorage, firestore } from "./lib/firebase";
-import { collection, getDocs, query, orderBy } from "firebase/firestore";
+import { collection, doc, getDocs, query, orderBy, setDoc, updateDoc, serverTimestamp } from "firebase/firestore";
 import { signInWithEmailAndPassword, signOut as firebaseSignOut, getIdTokenResult } from "firebase/auth";
 import heartshapersLogo from "./assets/heartshapers-logo.svg?no-inline";
 import {
@@ -45,7 +45,8 @@ import {
 } from "./lib/uploadSettings";
 import { logAdminAction } from "./lib/adminAudit";
 import GamesPage from "./components/GamesPage";
-import { listFirebaseBooks, softDeleteFirebaseBook } from "./lib/firebaseBooks";
+import { listFirebaseBooks, softDeleteFirebaseBook, updateFirebaseBookCover } from "./lib/firebaseBooks";
+import { uploadFirebaseAsset } from "./lib/firebaseAssetStorage";
 import {
   getAuthRole,
   isAdminUser,
@@ -2021,22 +2022,9 @@ function BookModal({ book, onClose, onSaved }) {
     const uploadFile = isCover ? await optimizeBookCover(file) : file;
     const safeName = uploadFile.name.toLowerCase().replace(/[^a-z0-9._-]/g, "-");
     const path = `${folder}/${crypto.randomUUID()}-${safeName}`;
-    const storage = supabase.storage.from(bucket);
-
-    const { error } = await storage.upload(path, uploadFile, {
-      upsert: false,
-      contentType: uploadFile.type || undefined,
-      cacheControl: "31536000"
-    });
-    if (error) {
-      const fileLabel = isCover ? "book cover" : "book PDF";
-      if (/bucket not found/i.test(error.message || "")) {
-        throw new Error(
-          `The Supabase Storage bucket "${bucket}" was not found while uploading the ${fileLabel}. Verify the Admin app's deployed Storage configuration.`
-        );
-      }
-      throw new Error(`Unable to upload the ${fileLabel}: ${error.message || "Storage upload failed."}`);
-    }
+    const firebasePath = `${folder}/${crypto.randomUUID()}-${safeName}`;
+    const uploaded = await uploadFirebaseAsset(firebasePath, uploadFile, uploadFile.type || (isCover ? "image/webp" : "application/pdf"));
+    const path = uploaded.path;
 
     await logAdminAction({
       action: isCover ? "book_cover_uploaded" : "book_pdf_uploaded",
@@ -2053,11 +2041,7 @@ function BookModal({ book, onClose, onSaved }) {
     // paths and signed by the mobile reader only after entitlement checks.
     if (!isCover) return path;
 
-    const { data } = storage.getPublicUrl(path);
-    if (!data?.publicUrl) {
-      throw new Error("The book cover uploaded, but Supabase did not return a public URL.");
-    }
-    return data.publicUrl;
+    return uploaded.downloadUrl;
   }
 
   async function saveBook(e) {
@@ -2124,34 +2108,12 @@ function BookModal({ book, onClose, onSaved }) {
       let result;
 
       if (form.id) {
-        const { data: updatedBook, error } = await supabase
-          .from("books")
-          .update(payload)
-          .eq("id", form.id)
-          .select("id")
-          .maybeSingle();
-
-        if (error) {
-          console.error("Book update failed", {
-            bookId: form.id,
-            message: error.message,
-            code: error.code,
-            details: error.details,
-            hint: error.hint
-          });
-
-          throw error;
+        const bookRef = doc(firestore, "books", form.id);
+        const updatedBook = await getDocs(query(collection(firestore, "books"), where("__name__", "==", form.id)));
+        if (updatedBook.empty || updatedBook.docs[0].data().deleted_at) {
+          throw new Error("The book could not be updated because it was not found or has been deleted.");
         }
-
-        if (!updatedBook) {
-          console.error("Book update affected no rows", {
-            bookId: form.id
-          });
-
-          throw new Error(
-            "The book could not be updated. Please check administrator permissions."
-          );
-        }
+        await updateDoc(bookRef, { ...payload, updated_at: serverTimestamp() });
 
         const changedFields = Object.keys(payload).filter((key) =>
           JSON.stringify(payload[key]) !== JSON.stringify(book?.[key] ?? (key === "price" ? 0 : key === "is_locked" ? false : null))
@@ -2178,21 +2140,10 @@ function BookModal({ book, onClose, onSaved }) {
         return;
       }
 
-      result = await supabase
-        .from("books")
-        .insert(payload)
-        .select()
-        .single();
-
-      if (result?.error) {
-        console.error("Book create failed", {
-          message: result.error.message,
-          code: result.error.code,
-          details: result.error.details,
-          hint: result.error.hint
-        });
-        throw result.error;
-      }
+      const bookId = crypto.randomUUID();
+      const bookRef = doc(firestore, "books", bookId);
+      result = { data: { id: bookId, ...payload } };
+      await setDoc(bookRef, { ...payload, created_at: serverTimestamp(), updated_at: serverTimestamp(), deleted_at: null });
 
       await logAdminAction({
         action: "book_created",
