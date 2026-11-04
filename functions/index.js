@@ -92,3 +92,58 @@ exports.reviewCartPayment = onCall({ region: "asia-southeast1" }, async (request
 
 // Firebase Auth user and administrator management callables.
 Object.assign(exports, require("./userManagement"));
+
+const SETTINGS_KEYS = new Set(["upload_settings", "payment_settings", "cover_optimization_v1", "game_cover_optimization_v1", "pdf_card_optimization_v1", "pillar_options", "category_options"]);
+exports.getAdminSetting = onCall({ region: "asia-southeast1" }, async (request) => {
+  requireAdmin(request);
+  const key = String(request.data?.key || "");
+  if (!SETTINGS_KEYS.has(key)) throw new HttpsError("invalid-argument", "Unsupported admin setting key.");
+  const snap = await db.collection("app_settings").doc(key).get();
+  return { value: snap.exists ? snap.data().value : null };
+});
+exports.setAdminSetting = onCall({ region: "asia-southeast1" }, async (request) => {
+  requireAdmin(request);
+  const key = String(request.data?.key || "");
+  if (!SETTINGS_KEYS.has(key) || !Object.prototype.hasOwnProperty.call(request.data || {}, "value")) {
+    throw new HttpsError("invalid-argument", "Unsupported setting or missing value.");
+  }
+  const value = request.data.value;
+  if (key === "payment_settings" && (!value || typeof value !== "object" || Array.isArray(value))) {
+    throw new HttpsError("invalid-argument", "Payment settings must be an object.");
+  }
+  if (key === "upload_settings" && (!value || typeof value !== "object" || Array.isArray(value))) {
+    throw new HttpsError("invalid-argument", "Upload settings must be an object.");
+  }
+  await db.collection("app_settings").doc(key).set({
+    value, updated_at: FieldValue.serverTimestamp(), updated_by: request.auth.uid
+  }, { merge: true });
+  return { saved: true };
+});
+exports.listAdminAuditLogs = onCall({ region: "asia-southeast1" }, async (request) => {
+  requireAdmin(request);
+  const snap = await db.collection("admin_logs").orderBy("created_at", "desc").limit(500).get();
+  return { logs: snap.docs.map((doc) => ({ id: doc.id, ...doc.data() })) };
+});
+exports.writeAdminAuditLog = onCall({ region: "asia-southeast1" }, async (request) => {
+  requireAdmin(request);
+  const { action, targetType = null, targetId = null, targetName = null, details = {} } = request.data || {};
+  if (typeof action !== "string" || !action.trim() || action.length > 120) {
+    throw new HttpsError("invalid-argument", "A valid audit action is required.");
+  }
+  const redact = (value) => {
+    if (Array.isArray(value)) return value.map(redact);
+    if (!value || typeof value !== "object") return value;
+    return Object.fromEntries(Object.entries(value).map(([key, item]) => [
+      key, /password|token|secret|credential|pin|api[_ -]?key/i.test(key) ? "[redacted]" : redact(item)
+    ]));
+  };
+  await db.collection("admin_logs").add({
+    action: action.trim(), admin_email: request.auth.token.email || null,
+    details: redact({ ...(details && typeof details === "object" ? details : {}),
+      ...(targetType ? { target_type: targetType } : {}),
+      ...(targetId == null ? {} : { target_id: String(targetId) }),
+      ...(targetName ? { target_name: targetName } : {}) }),
+    created_at: FieldValue.serverTimestamp()
+  });
+  return { logged: true };
+});
