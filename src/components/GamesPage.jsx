@@ -22,15 +22,12 @@ import { getLegacyGameRuleBlocks, parseInlineFormatting } from "../lib/legacyGam
 import {
   createPdfGame,
   downloadPdfGameSource,
-  deleteGame,
-  loadGameAccess,
-  listGamesWithCounts,
-  loadGameDetails,
-  updateGameAccess,
+
   updateGameWithCover,
   updatePdfGame
 } from "../lib/games";
 import { gameUploadSizeError, loadGameUploadLimit } from "../lib/uploadSettings";
+import { listFirebaseGamesWithCounts, loadFirebaseGameDetails, loadFirebaseGameAccess, updateFirebaseGameAccess, softDeleteFirebaseGame } from "../lib/firebaseGames";
 import { supabase } from "../lib/supabase";
 
 const CARD_PAGE_SIZE = 20;
@@ -847,7 +844,7 @@ export default function GamesPage({ canManageGames, ConfirmModal, showToast }) {
     let active = true;
     setLoading(true);
     setError("");
-    listGamesWithCounts()
+    listFirebaseGamesWithCounts()
       .then((result) => {
         if (!active) return;
         setGames(result.games);
@@ -1167,7 +1164,7 @@ export default function GamesPage({ canManageGames, ConfirmModal, showToast }) {
     if (!deleteTarget) return false;
 
     try {
-      const deletedGame = await deleteGame(deleteTarget.id);
+      const deletedGame = await softDeleteFirebaseGame(deleteTarget.id);
       const auditSucceeded = await logAdminAction({
         action: "game_deleted",
         targetType: "game",
@@ -1611,7 +1608,7 @@ function AddGameModal({
     let active = true;
     setLoadingExisting(true);
     Promise.all([
-      loadGameDetails(game.id),
+      loadFirebaseGameDetails(game.id),
       downloadPdfGameSource(game.id, game.source_pdf_path)
     ]).then(async ([result, sourceBlob]) => {
       if (!active) return;
@@ -2171,7 +2168,7 @@ function GameDetailsModal({ game, gameUploadLimit, uploadLimitError, onClose, on
     setLoadErrors({});
     Promise.allSettled([
       loadGameDetails(game.id),
-      loadGameAccess(game.id)
+      loadFirebaseGameAccess(game.id)
     ]).then(async ([detailsResult, accessResult]) => {
       const errors = {};
       let nextDetails = { rules: [], cards: [] };
