@@ -191,7 +191,7 @@ async function loadUploadSettings() {
   return normalizeUploadSettings(value || DEFAULT_UPLOAD_SETTINGS);
 }
 
-async function saveUploadSettingsToSupabase(settings) {
+async function saveUploadSettingsToFirebase(settings) {
   const normalized = normalizeUploadSettings(settings);
   await setAdminSetting("upload_settings", normalized);
   return normalized;
@@ -207,7 +207,7 @@ async function loadPaymentSettings() {
   return loaded;
 }
 
-async function savePaymentSettingsToSupabase(settings) {
+async function savePaymentSettingsToFirebase(settings) {
   const normalized = { ...DEFAULT_PAYMENT_SETTINGS, ...settings, payment_method: "gcash" };
   await setAdminSetting("payment_settings", normalized);
   return normalized;
