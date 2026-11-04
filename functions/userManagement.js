@@ -1,15 +1,25 @@
 const { onCall, HttpsError } = require("firebase-functions/v2/https");
 const { getAuth } = require("firebase-admin/auth");
 const { getFirestore, FieldValue } = require("firebase-admin/firestore");
+const { defineSecret } = require("firebase-functions/params");
 
 const REGION = "asia-southeast1";
 const db = getFirestore();
+const SMTP_HOST = defineSecret("SMTP_HOST");
+const SMTP_PORT = defineSecret("SMTP_PORT");
+const SMTP_USER = defineSecret("SMTP_USER");
+const SMTP_PASSWORD = defineSecret("SMTP_PASSWORD");
+const SMTP_FROM = defineSecret("SMTP_FROM");
+const VERIFY_CONTINUE_URL = defineSecret("VERIFY_CONTINUE_URL");
 
 function roleOf(request) {
   const roles = request.auth?.token?.roles;
   const role = request.auth?.token?.role;
-  const candidates = Array.isArray(roles) ? roles : [roles, role];
-  return candidates.map((value) => String(value || "").trim().toLowerCase()).find(Boolean) || "";
+  const candidates = [...(Array.isArray(roles) ? roles : [roles]), role];
+  const normalized = candidates.map((value) => String(value || "").trim().toLowerCase()).filter(Boolean);
+  if (normalized.includes("super_admin")) return "super_admin";
+  if (normalized.includes("admin")) return "admin";
+  return normalized[0] || "";
 }
 
 function requireAdmin(request, superAdmin = false) {
@@ -48,13 +58,35 @@ async function listAllUsers() {
   return users;
 }
 
+async function sendVerificationEmail(user) {
+  const link = await getAuth().generateEmailVerificationLink(user.email, {
+    url: VERIFY_CONTINUE_URL.value(),
+    handleCodeInApp: false
+  });
+  const nodemailer = require("nodemailer");
+  const transport = nodemailer.createTransport({
+    host: SMTP_HOST.value(),
+    port: Number(SMTP_PORT.value() || 587),
+    secure: Number(SMTP_PORT.value() || 587) === 465,
+    auth: { user: SMTP_USER.value(), pass: SMTP_PASSWORD.value() }
+  });
+  await transport.sendMail({
+    from: SMTP_FROM.value(),
+    to: user.email,
+    subject: "Verify your HEARTSHAPERS account",
+    text: `Hello ${user.displayName || "there"},\\n\\nPlease verify your HEARTSHAPERS account using this link:\\n${link}\\n\\nIf you did not request this account, you can ignore this email.`,
+    html: `<p>Hello ${user.displayName || "there"},</p><p>Please verify your HEARTSHAPERS account:</p><p><a href="${link}">Verify email address</a></p><p>If you did not request this account, you can ignore this email.</p>`
+  });
+}
+const MAIL_SECRETS = [SMTP_HOST, SMTP_PORT, SMTP_USER, SMTP_PASSWORD, SMTP_FROM, VERIFY_CONTINUE_URL];
+
 exports.listManagedUsers = onCall({ region: REGION }, async (request) => {
   requireAdmin(request);
   const users = await listAllUsers();
   return { users: users.filter((user) => !["admin", "super_admin"].includes(String(user.customClaims?.role || "").toLowerCase())).map(publicUser) };
 });
 
-exports.createManagedUser = onCall({ region: REGION }, async (request) => {
+exports.createManagedUser = onCall({ region: REGION, secrets: MAIL_SECRETS }, async (request) => {
   requireAdmin(request);
   const { full_name, email, password, membership_tier = "regular" } = request.data || {};
   const name = String(full_name || "").trim();
@@ -72,7 +104,7 @@ exports.createManagedUser = onCall({ region: REGION }, async (request) => {
       membership_tier: String(membership_tier).toLowerCase() === "vip" ? "vip" : "regular",
       email_verified: false, disabled: false, created_at: FieldValue.serverTimestamp(), updated_at: FieldValue.serverTimestamp()
     }, { merge: true });
-    return { user: publicUser({ ...user, customClaims: { role: "user", membership_tier }, displayName: name }) };
+    let emailSent = false;\n    try { await sendVerificationEmail({ ...user, displayName: name }); emailSent = true; } catch (mailError) { console.error("Verification email delivery failed.", { uid: user.uid, code: mailError.code || mailError.name || "MAIL_FAILED" }); }\n    return { user: publicUser({ ...user, customClaims: { role: "user", membership_tier }, displayName: name }), email_sent: emailSent };
   } catch (error) {
     if (error.code === "auth/email-already-exists") throw new HttpsError("already-exists", "EMAIL_ALREADY_EXISTS");
     throw new HttpsError("internal", "USER_CREATE_FAILED");
@@ -98,7 +130,7 @@ exports.listManagedAdmins = onCall({ region: REGION }, async (request) => {
   return { admins: users.filter((user) => ["admin", "super_admin"].includes(String(user.customClaims?.role || "").toLowerCase())).map(publicUser) };
 });
 
-exports.createManagedAdmin = onCall({ region: REGION }, async (request) => {
+exports.createManagedAdmin = onCall({ region: REGION, secrets: MAIL_SECRETS }, async (request) => {
   requireAdmin(request, true);
   const { full_name, email, password } = request.data || {};
   const name = String(full_name || "").trim();
@@ -115,7 +147,7 @@ exports.createManagedAdmin = onCall({ region: REGION }, async (request) => {
       uid: user.uid, email: normalizedEmail, full_name: name, role: "admin",
       email_verified: false, disabled: false, created_at: FieldValue.serverTimestamp(), updated_at: FieldValue.serverTimestamp()
     }, { merge: true });
-    return { admin: publicUser({ ...user, customClaims: { role: "admin", full_name: name }, displayName: name }) };
+    let emailSent = false;\n    try { await sendVerificationEmail({ ...user, displayName: name }); emailSent = true; } catch (mailError) { console.error("Administrator verification email delivery failed.", { uid: user.uid, code: mailError.code || mailError.name || "MAIL_FAILED" }); }\n    return { admin: publicUser({ ...user, customClaims: { role: "admin", full_name: name }, displayName: name }), email_sent: emailSent };
   } catch (error) {
     if (error.code === "auth/email-already-exists") throw new HttpsError("already-exists", "An account with this email already exists.");
     throw new HttpsError("internal", "Unable to create the administrator account. Please try again.");
