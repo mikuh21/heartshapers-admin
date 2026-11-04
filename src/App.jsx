@@ -30,6 +30,9 @@ import {
   RotateCcw
 } from "lucide-react";
 import { supabase, COVER_BUCKET, PDF_BUCKET } from "./lib/supabase";
+import { getFunctions, httpsCallable } from "firebase/functions";
+import { ref as firebaseStorageRef, getDownloadURL } from "firebase/storage";
+import { firebaseApp, firebaseStorage } from "./lib/firebase";
 import heartshapersLogo from "./assets/heartshapers-logo.svg?no-inline";
 import {
   DEFAULT_UPLOAD_SETTINGS,
@@ -3254,10 +3257,12 @@ function PaymentsPage({ canManagePayments }) {
       targetName: payment.payment_items?.map((item) => item.title).join(", ") || getPaymentProduct(payment)?.title || null,
       details: { customer_id: payment.user_id, amount: payment.amount, item_count: payment.payment_items?.length || 1 }
     });
-    const { data, error: signedUrlError } = await supabase.storage
-      .from(PAYMENT_PROOF_BUCKET)
-      .createSignedUrl(payment.proof_image_url, 3600);
-    if (!signedUrlError) setProofUrl(data.signedUrl);
+    try {
+      const url = await getDownloadURL(firebaseStorageRef(firebaseStorage, payment.proof_image_url));
+      setProofUrl(url);
+    } catch (signedUrlError) {
+      console.error("Unable to resolve Firebase payment proof.", signedUrlError);
+    }
   }
 
   const userById = new Map(users.map((user) => [user.id, user]));
@@ -3271,14 +3276,14 @@ function PaymentsPage({ canManagePayments }) {
     if (!selected) return;
     setBusy(true);
     try {
-      const { data, error: reviewError } = await supabase.rpc("review_cart_payment", {
-        p_user_id: selected.user_id,
-        p_reference_number: selected.reference_number,
-        p_proof_image_url: selected.proof_image_url,
-        p_action: action,
-        p_note: note.trim() || null
+      const reviewCartPayment = httpsCallable(getFunctions(firebaseApp, "asia-southeast1"), "reviewCartPayment");
+      const { data } = await reviewCartPayment({
+        user_id: selected.user_id,
+        reference_number: selected.reference_number,
+        proof_image_url: selected.proof_image_url,
+        action,
+        note: note.trim() || null
       });
-      if (reviewError) throw reviewError;
 
       let notificationFailed = false;
       if (action === "verify") {
