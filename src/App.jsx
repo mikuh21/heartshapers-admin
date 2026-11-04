@@ -3074,7 +3074,10 @@ function PaymentsPage({ canManagePayments }) {
       details: { customer_id: payment.user_id, amount: payment.amount, item_count: payment.payment_items?.length || 1 }
     });
     try {
-      const url = await getDownloadURL(firebaseStorageRef(firebaseStorage, payment.proof_image_url));
+      const proofLocation = String(payment.proof_image_url || "");
+      const url = proofLocation.startsWith("http")
+        ? proofLocation
+        : await getDownloadURL(firebaseStorageRef(firebaseStorage, proofLocation));
       setProofUrl(url);
     } catch (signedUrlError) {
       console.error("Unable to resolve Firebase payment proof.", signedUrlError);
