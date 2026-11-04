@@ -87,3 +87,6 @@ exports.reviewCartPayment = onCall({ region: "asia-southeast1" }, async (request
     return { status: action === "verify" ? "verified" : "rejected", items_reviewed: pending.length };
   });
 });
+
+// Firebase Auth user and administrator management callables.
+Object.assign(exports, require("./userManagement"));
