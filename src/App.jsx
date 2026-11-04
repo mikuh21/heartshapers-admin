@@ -32,7 +32,8 @@ import {
 import { supabase, COVER_BUCKET, PDF_BUCKET } from "./lib/supabase";
 import { getFunctions, httpsCallable } from "firebase/functions";
 import { ref as firebaseStorageRef, getDownloadURL } from "firebase/storage";
-import { firebaseApp, firebaseStorage } from "./lib/firebase";
+import { firebaseApp, firebaseAuth, firebaseStorage } from "./lib/firebase";
+import { signInWithEmailAndPassword, signOut as firebaseSignOut, getIdTokenResult } from "firebase/auth";
 import heartshapersLogo from "./assets/heartshapers-logo.svg?no-inline";
 import {
   DEFAULT_UPLOAD_SETTINGS,
@@ -776,12 +777,39 @@ function Login() {
       return;
     }
 
+    // Establish Firebase Auth as the identity used by Firebase-backed admin actions.
+    // Supabase remains active during the staged migration for legacy admin modules.
+    let firebaseCredential;
+    try {
+      firebaseCredential = await signInWithEmailAndPassword(firebaseAuth, email.trim(), password);
+      const tokenResult = await getIdTokenResult(firebaseCredential.user, true);
+      const firebaseRoles = [tokenResult.claims.role, tokenResult.claims.roles]
+        .flatMap((value) => Array.isArray(value) ? value : [value])
+        .map((value) => String(value || "").trim().toLowerCase());
+      if (!firebaseRoles.some((value) => ["admin", "super_admin"].includes(value))) {
+        await firebaseSignOut(firebaseAuth);
+        await supabase.auth.signOut();
+        setError("Your Firebase account is not provisioned with the admin role yet. Ask the project administrator to assign the admin custom claim.");
+        setBusy(false);
+        return;
+      }
+    } catch (firebaseError) {
+      await supabase.auth.signOut();
+      setError(firebaseError?.code === "auth/user-not-found"
+        ? "This administrator account has not been migrated to Firebase Authentication yet."
+        : firebaseError?.code === "auth/wrong-password" || firebaseError?.code === "auth/invalid-credential"
+          ? "The Firebase admin credentials could not be verified. Ensure the account is migrated and its password matches."
+          : firebaseError?.message || "Firebase admin authentication failed.");
+      setBusy(false);
+      return;
+    }
+
     await logAdminAction({
       action: "admin_login",
       targetType: "admin_account",
       targetId: data.user.id,
       targetName: data.user.email || null,
-      details: { role: getAuthRole(data.user) }
+      details: { role: getAuthRole(data.user), firebase_uid: firebaseCredential.user.uid }
     });
     setBusy(false);
   }
@@ -850,6 +878,7 @@ function AdminAccessDenied() {
           className="primary-btn full"
           onClick={async () => {
             await supabase.auth.signOut();
+            await firebaseSignOut(firebaseAuth).catch(() => {});
             window.location.reload();
           }}
         >
@@ -927,6 +956,9 @@ function AdminApp({ session }) {
   async function logout() {
     const { data: sessionData } = await supabase.auth.getSession();
     const result = await supabase.auth.signOut();
+    await firebaseSignOut(firebaseAuth).catch((error) => {
+      console.error("Firebase admin logout failed.", { code: error?.code || "UNKNOWN" });
+    });
     if (!result.error && sessionData.session?.access_token) {
       await logAdminAction({
         action: "admin_logout",
