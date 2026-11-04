@@ -1132,22 +1132,25 @@ function Dashboard({ goBooks }) {
 
   async function loadStats() {
     setLoading(true);
-    const [
-      { data, error },
-      { count: gamesCount, error: gamesError }
-    ] = await Promise.all([
-      supabase.from("books").select("id, pillar, is_locked").is("deleted_at", null),
-      supabase.from("games").select("id", { count: "exact", head: true }).is("deleted_at", null)
-    ]);
-
-    if (!error) {
-      const rows = data || [];
+    try {
+      const [bookSnapshot, gameSnapshot] = await Promise.all([
+        getDocs(collection(firestore, "books")),
+        getDocs(collection(firestore, "games"))
+      ]);
+      const rows = bookSnapshot.docs
+        .map((doc) => ({ id: doc.id, ...doc.data() }))
+        .filter((book) => !book.deleted_at);
+      const gamesCount = gameSnapshot.docs
+        .map((doc) => ({ id: doc.id, ...doc.data() }))
+        .filter((game) => !game.deleted_at).length;
       setStats({
         total: rows.length,
-        totalGames: gamesError ? 0 : gamesCount || 0,
-        locked: rows.filter((b) => b.is_locked).length,
-        free: rows.filter((b) => !b.is_locked).length
+        totalGames: gamesCount,
+        locked: rows.filter((book) => Boolean(book.is_locked)).length,
+        free: rows.filter((book) => !book.is_locked).length
       });
+    } catch (error) {
+      console.error("Unable to load Firebase dashboard stats.", { code: error?.code || "FIRESTORE_READ_FAILED" });
     }
     setLoading(false);
   }
