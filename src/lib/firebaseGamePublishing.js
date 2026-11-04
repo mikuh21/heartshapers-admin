@@ -87,6 +87,7 @@ async function uploadPdfPages(gameId, pageFiles, version) {
     await uploadFirebaseAsset(path, optimized.blob, optimized.contentType);
     cards.push({
       id: `page-${String(index + 1).padStart(4, "0")}`,
+      game_id: gameId,
       sort_order: index + 1,
       front_text: "",
       back_text: "",
