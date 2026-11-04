@@ -3315,7 +3315,7 @@ function SettingsPage() {
   async function saveUploadSettings() {
     setUploadSettingsLoading(true);
     try {
-      const normalized = await saveUploadSettingsToSupabase(uploadSettings);
+      const normalized = await saveUploadSettingsToFirebase(uploadSettings);
       await logAdminAction({
         action: "upload_settings_updated",
         targetType: "app_setting",
@@ -3342,7 +3342,7 @@ function SettingsPage() {
   async function savePaymentSettings() {
     setPaymentSettingsLoading(true);
     try {
-      const normalized = await savePaymentSettingsToSupabase({
+      const normalized = await savePaymentSettingsToFirebase({
         ...paymentSettings,
         qr_image_urls: Array.isArray(paymentSettings.qr_image_urls) ? paymentSettings.qr_image_urls : (paymentSettings.qr_image_url ? [paymentSettings.qr_image_url] : []),
         qr_image_url: (Array.isArray(paymentSettings.qr_image_urls) ? paymentSettings.qr_image_urls[0] : paymentSettings.qr_image_url) || ""
