@@ -68,7 +68,7 @@ const COVER_OPTIMIZATION_SETTING_KEY = "cover_optimization_v1";
 
 function isOptimizedBookCoverUrl(value) {
   const url = String(value || "").toLowerCase();
-  return url.includes("/optimized/") || url.includes("optimized%2f") || /\\.webp(?:[?#]|$)/.test(url);
+  return url.includes("/optimized/") || url.includes("optimized%2f") || /\.webp(?:[?#]|$)/.test(url);
 }
 
 async function loadCoverOptimizationState() {
