@@ -33,7 +33,7 @@ import { supabase, COVER_BUCKET, PDF_BUCKET } from "./lib/supabase";
 import { getFunctions, httpsCallable } from "firebase/functions";
 import { ref as firebaseStorageRef, getDownloadURL } from "firebase/storage";
 import { firebaseApp, firebaseAuth, firebaseStorage, firestore } from "./lib/firebase";
-import { collection, doc, getDocs, query, orderBy, setDoc, updateDoc, serverTimestamp } from "firebase/firestore";
+import { collection, doc, getDocs, query, where, orderBy, setDoc, updateDoc, serverTimestamp } from "firebase/firestore";
 import { signInWithEmailAndPassword, signOut as firebaseSignOut, getIdTokenResult } from "firebase/auth";
 import heartshapersLogo from "./assets/heartshapers-logo.svg?no-inline";
 import {
@@ -46,7 +46,7 @@ import {
 import { logAdminAction } from "./lib/adminAudit";
 import GamesPage from "./components/GamesPage";
 import { listFirebaseBooks, softDeleteFirebaseBook, updateFirebaseBookCover } from "./lib/firebaseBooks";
-import { uploadFirebaseAsset } from "./lib/firebaseAssetStorage";
+import { uploadFirebaseAsset, deleteFirebaseAsset } from "./lib/firebaseAssetStorage";
 import {
   getAuthRole,
   isAdminUser,
@@ -1370,33 +1370,18 @@ function Books() {
             outcome = "skipped";
           } else {
             uploadedPath = `covers/optimized/${book.id}-${Date.now()}.webp`;
-            const { error: uploadError } = await supabase.storage.from(COVER_BUCKET).upload(uploadedPath, result.blob, {
-              contentType: "image/webp",
-              cacheControl: "31536000",
-              upsert: false
-            });
-            if (uploadError) throw uploadError;
+            const uploaded = await uploadFirebaseAsset(uploadedPath, result.blob, "image/webp");
+            const optimizedUrl = uploaded.downloadUrl;
+            if (!optimizedUrl) throw new Error("Firebase did not return the optimized cover URL.");
 
-            const { data: publicUrlData } = supabase.storage.from(COVER_BUCKET).getPublicUrl(uploadedPath);
-            const optimizedUrl = publicUrlData?.publicUrl;
-            if (!optimizedUrl) throw new Error("Supabase did not return the optimized cover URL.");
-
-            const { data: updatedBook, error: updateError } = await supabase
-              .from("books")
-              .update({ cover_image_url: optimizedUrl })
-              .eq("id", book.id)
-              .eq("cover_image_url", book.cover_image_url)
-              .select("id")
-              .maybeSingle();
-            if (updateError) throw updateError;
-            if (!updatedBook) throw new Error("Book cover changed during optimization; the original URL was retained.");
+            await updateFirebaseBookCover(book.id, book.cover_image_url, optimizedUrl);
 
             optimizedCount += 1;
             outcome = "optimized";
           }
         } catch (error) {
           if (uploadedPath) {
-            try { await supabase.storage.from(COVER_BUCKET).remove([uploadedPath]); } catch {}
+            try { await deleteFirebaseAsset(uploadedPath); } catch {}
           }
           failures.push(`${book.title || book.id}: ${error?.message || "Unknown error"}`);
         } finally {
