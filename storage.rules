@@ -1,0 +1,66 @@
+rules_version = '2';
+service firebase.storage {
+  match /b/{bucket}/o {
+    function signedIn() {
+      return request.auth != null;
+    }
+
+    function hasAdminRole() {
+      return signedIn()
+        && (
+          request.auth.token.role in ['admin', 'super_admin']
+          || (
+            request.auth.token.roles is list
+            && request.auth.token.roles.hasAny(['admin', 'super_admin'])
+          )
+        );
+    }
+
+    function validImageUpload() {
+      return request.resource != null
+        && request.resource.size < 12 * 1024 * 1024
+        && request.resource.contentType.matches('image/(jpeg|png|webp)');
+    }
+
+    function validPdfUpload() {
+      return request.resource != null
+        && request.resource.size < 25 * 1024 * 1024
+        && request.resource.contentType == 'application/pdf';
+    }
+
+    // Cover images are public to display in the catalog; modifications and
+    // Storage listing remain restricted to authorized administrators.
+    match /covers/{assetPath=**} {
+      allow get: if true;
+      allow list: if hasAdminRole();
+      allow create, update: if hasAdminRole() && validImageUpload();
+      allow delete: if hasAdminRole();
+    }
+
+    // PDFs are private. Admin dashboard access is permitted; customer reader
+    // access should be issued by an entitlement-checked callable function.
+    match /pdfs/{assetPath=**} {
+      allow read: if hasAdminRole();
+      allow create, update: if hasAdminRole() && validPdfUpload();
+      allow delete: if hasAdminRole();
+    }
+
+    // Payment QR codes may be viewed by signed-in customers; only admins can
+    // upload, replace, list, or remove them.
+    match /payment-qr/{assetPath=**} {
+      allow get: if signedIn();
+      allow list: if hasAdminRole();
+      allow create, update: if hasAdminRole() && validImageUpload();
+      allow delete: if hasAdminRole();
+    }
+
+    // Payment evidence contains private customer information.
+    match /payment-proofs/{assetPath=**} {
+      allow read, write: if hasAdminRole();
+    }
+
+    match /{assetPath=**} {
+      allow read, write: if false;
+    }
+  }
+}
