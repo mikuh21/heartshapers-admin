@@ -46,24 +46,8 @@ async function loadGameCoverOptimizationState() {
 }
 
 async function saveGameCoverOptimizationState(state) {
-  const { data: sessionData, error: sessionError } = await supabase.auth.getSession();
-  const userId = sessionData?.session?.user?.id;
-  if (sessionError || !userId) {
-    const authError = new Error("Your admin session has expired. Sign in again before continuing game-cover optimization.");
-    authError.code = "ADMIN_SESSION_EXPIRED";
-    throw authError;
-  }
-  const { error } = await supabase
-    .from("app_settings")
-    .upsert({
-      key: GAME_COVER_OPTIMIZATION_KEY,
-      value: state,
-      updated_at: new Date().toISOString(),
-      updated_by: userId
-    }, { onConflict: "key" });
-  if (error) throw error;
+  await setAdminSetting(GAME_COVER_OPTIMIZATION_KEY, state);
 }
-
 async function optimizeExistingGameCover(url) {
   if (!url || typeof createImageBitmap !== "function" || typeof document === "undefined") {
     throw new Error("This browser does not support cover optimization.");
