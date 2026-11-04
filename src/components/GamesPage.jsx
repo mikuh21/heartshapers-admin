@@ -27,7 +27,8 @@ import {
   updatePdfGame
 } from "../lib/games";
 import { gameUploadSizeError, loadGameUploadLimit } from "../lib/uploadSettings";
-import { listFirebaseGamesWithCounts, loadFirebaseGameDetails, loadFirebaseGameAccess, updateFirebaseGameAccess, softDeleteFirebaseGame } from "../lib/firebaseGames";
+import { listFirebaseGamesWithCounts, loadFirebaseGameDetails, loadFirebaseGameAccess, updateFirebaseGameAccess, softDeleteFirebaseGame, updateFirebaseGameWithCover } from "../lib/firebaseGames";
+import { createFirebasePdfGame, downloadFirebasePdfGameSource, updateFirebasePdfGame } from "../lib/firebaseGamePublishing";
 import { supabase } from "../lib/supabase";
 
 const CARD_PAGE_SIZE = 20;
@@ -1609,7 +1610,7 @@ function AddGameModal({
     setLoadingExisting(true);
     Promise.all([
       loadFirebaseGameDetails(game.id),
-      downloadPdfGameSource(game.id, game.source_pdf_path)
+      downloadFirebasePdfGameSource(game.id, game.source_pdf_path)
     ]).then(async ([result, sourceBlob]) => {
       if (!active) return;
       if (result.rules.error) throw result.rules.error;
@@ -1887,14 +1888,14 @@ function AddGameModal({
         rules: form.rules.trim()
       };
       if (isEditing) {
-        const updatedGame = await updatePdfGame(payload, {
+        const updatedGame = await updateFirebasePdfGame(payload, {
           coverFile,
           sourcePdfFile: pdfFile,
           pageFiles
         });
         await onSaved(updatedGame);
       } else {
-        const createdGame = await createPdfGame(payload, coverFile, pdfFile, pageFiles);
+        const createdGame = await createFirebasePdfGame(payload, coverFile, pdfFile, pageFiles);
         await onCreated(createdGame);
       }
     } catch (saveError) {
@@ -2278,7 +2279,7 @@ function GameDetailsModal({ game, gameUploadLimit, uploadLimitError, onClose, on
     const subtitleChanged = subtitle !== (game.subtitle ?? "");
     setSavingInfo(true);
     try {
-      const updatedGame = await updateGameWithCover(game.id, Boolean(form.is_locked), {
+      const updatedGame = await updateFirebaseGameWithCover(game.id, Boolean(form.is_locked), {
         title,
         ...(subtitleChanged ? { subtitle } : {}),
         ...(descriptionChanged ? { description } : {}),
