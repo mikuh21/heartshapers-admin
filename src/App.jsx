@@ -79,22 +79,7 @@ async function loadCoverOptimizationState() {
 }
 
 async function saveCoverOptimizationState(state) {
-  const { data: sessionData, error: sessionError } = await supabase.auth.getSession();
-  const userId = sessionData?.session?.user?.id;
-  if (sessionError || !userId) {
-    const authError = new Error("Your admin session has expired. Sign in again before continuing cover optimization.");
-    authError.code = "ADMIN_SESSION_EXPIRED";
-    throw authError;
-  }
-  const { error } = await supabase
-    .from("app_settings")
-    .upsert({
-      key: COVER_OPTIMIZATION_SETTING_KEY,
-      value: state,
-      updated_at: new Date().toISOString(),
-      updated_by: userId
-    }, { onConflict: "key" });
-  if (error) throw error;
+  await setAdminSetting(COVER_OPTIMIZATION_SETTING_KEY, state);
 }
 
 async function optimizeBookCover(file) {
