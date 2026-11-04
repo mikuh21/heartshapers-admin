@@ -205,34 +205,13 @@ const DEFAULT_PAYMENT_SETTINGS = {
 const ToastContext = createContext(null);
 
 async function loadUploadSettings() {
-  const { data, error } = await supabase
-    .from("app_settings")
-    .select("value")
-    .eq("key", "upload_settings")
-    .maybeSingle();
-
-  if (error) throw error;
-  return normalizeUploadSettings(data?.value || DEFAULT_UPLOAD_SETTINGS);
+  const { value } = await getAdminSetting("upload_settings");
+  return normalizeUploadSettings(value || DEFAULT_UPLOAD_SETTINGS);
 }
 
 async function saveUploadSettingsToSupabase(settings) {
   const normalized = normalizeUploadSettings(settings);
-  const { data: userData } = await supabase.auth.getUser();
-  const { error } = await supabase
-    .from("app_settings")
-    .upsert(
-      {
-        key: "upload_settings",
-        value: normalized,
-        updated_at: new Date().toISOString(),
-        updated_by: userData.user?.id || null
-      },
-      {
-        onConflict: "key"
-      }
-    );
-
-  if (error) throw error;
+  await setAdminSetting("upload_settings", normalized);
   return normalized;
 }
 
