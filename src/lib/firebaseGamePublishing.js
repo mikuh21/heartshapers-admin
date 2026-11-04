@@ -12,7 +12,6 @@ import { getBlob, ref } from "firebase/storage";
 import { firestore, firebaseStorage } from "./firebase";
 import { uploadFirebaseAsset, getFirebaseAssetDownloadUrl } from "./firebaseAssetStorage";
 import {
-  describeGameStorageUploadError,
   gameUploadSizeError,
   loadGameUploadLimit
 } from "./uploadSettings";
