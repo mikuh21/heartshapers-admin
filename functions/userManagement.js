@@ -92,7 +92,7 @@ exports.createManagedUser = onCall({ region: REGION, secrets: MAIL_SECRETS }, as
   const name = String(full_name || "").trim();
   const normalizedEmail = String(email || "").trim().toLowerCase();
   if (!name) throw new HttpsError("invalid-argument", "FULL_NAME_REQUIRED");
-  if (!/^[^\\s@]+@gmail\\.com$/i.test(normalizedEmail)) throw new HttpsError("invalid-argument", "EMAIL_INVALID");
+  if (!/^[^\s@]+@gmail\.com$/i.test(normalizedEmail)) throw new HttpsError("invalid-argument", "EMAIL_INVALID");
   if (typeof password !== "string" || password.length < 8 || password.length > 16 || !/[^A-Za-z0-9]/.test(password)) {
     throw new HttpsError("invalid-argument", "PASSWORD_INVALID");
   }
@@ -136,7 +136,7 @@ exports.createManagedAdmin = onCall({ region: REGION, secrets: MAIL_SECRETS }, a
   const name = String(full_name || "").trim();
   const normalizedEmail = String(email || "").trim().toLowerCase();
   if (!name) throw new HttpsError("invalid-argument", "Full name is required.");
-  if (!/^[^\\s@]+@gmail\\.com$/i.test(normalizedEmail)) throw new HttpsError("invalid-argument", "Please enter a valid Gmail address.");
+  if (!/^[^\s@]+@gmail\.com$/i.test(normalizedEmail)) throw new HttpsError("invalid-argument", "Please enter a valid Gmail address.");
   if (typeof password !== "string" || password.length < 8 || password.length > 16 || !/[^A-Za-z0-9]/.test(password)) {
     throw new HttpsError("invalid-argument", "Password must be 8–16 characters and contain at least one special character.");
   }
