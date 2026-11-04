@@ -1828,7 +1828,6 @@ function BookModal({ book, onClose, onSaved }) {
     const isCover = folder === "covers";
     const uploadFile = isCover ? await optimizeBookCover(file) : file;
     const safeName = uploadFile.name.toLowerCase().replace(/[^a-z0-9._-]/g, "-");
-    const path = `${folder}/${crypto.randomUUID()}-${safeName}`;
     const firebasePath = `${folder}/${crypto.randomUUID()}-${safeName}`;
     const uploaded = await uploadFirebaseAsset(firebasePath, uploadFile, uploadFile.type || (isCover ? "image/webp" : "application/pdf"));
     const path = uploaded.path;
