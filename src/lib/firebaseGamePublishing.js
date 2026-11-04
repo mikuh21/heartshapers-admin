@@ -209,14 +209,26 @@ export async function updateFirebasePdfGame(gameData, { coverFile = null, source
     if (!Array.isArray(pageFiles) || !pageFiles.length) throw new Error("Select at least one PDF page for the card deck.");
     const cards = await uploadPdfPages(gameData.id, pageFiles, version);
     const existingCards = await getDocs(collection(firestore, "games", gameData.id, "game_cards"));
-    const batch = writeBatch(firestore);
-    existingCards.docs.forEach((item) => batch.delete(item.ref));
-    cards.forEach((card) => batch.set(doc(firestore, "games", gameData.id, "game_cards", card.id), {
-      ...card,
-      created_at: serverTimestamp(),
-      updated_at: serverTimestamp()
-    }));
-    await batch.commit();
+    const existingById = new Map(existingCards.docs.map((item) => [item.id, item]));
+    for (let offset = 0; offset < cards.length; offset += 450) {
+      const batch = writeBatch(firestore);
+      cards.slice(offset, offset + 450).forEach((card) => {
+        const previous = existingById.get(card.id);
+        batch.set(doc(firestore, "games", gameData.id, "game_cards", card.id), {
+          ...card,
+          created_at: previous?.data()?.created_at || serverTimestamp(),
+          updated_at: serverTimestamp()
+        });
+      });
+      await batch.commit();
+    }
+    const retainedIds = new Set(cards.map((card) => card.id));
+    const obsoleteCards = existingCards.docs.filter((item) => !retainedIds.has(item.id));
+    for (let offset = 0; offset < obsoleteCards.length; offset += 450) {
+      const batch = writeBatch(firestore);
+      obsoleteCards.slice(offset, offset + 450).forEach((item) => batch.delete(item.ref));
+      await batch.commit();
+    }
   }
   const rulesRef = collection(firestore, "games", gameData.id, "game_rules");
   const existingRules = await getDocs(rulesRef);
