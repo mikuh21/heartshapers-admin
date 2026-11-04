@@ -956,8 +956,8 @@ export default function GamesPage({ canManageGames, ConfirmModal, showToast }) {
     let active = true;
 
     const runOptimization = async () => {
-      const { data: authData, error: authError } = await supabase.auth.getUser();
-      if (authError || !authData?.user) {
+      const currentAdmin = firebaseAuth.currentUser;
+      if (!currentAdmin) {
         showToast("Your admin session has expired. Sign in again before optimizing PDF card images.", "error");
         return;
       }
