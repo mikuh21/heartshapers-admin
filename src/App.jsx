@@ -46,7 +46,7 @@ import {
 import { logAdminAction } from "./lib/adminAudit";
 import GamesPage from "./components/GamesPage";
 import { listFirebaseBooks, softDeleteFirebaseBook, updateFirebaseBookCover } from "./lib/firebaseBooks";
-import { ensureFirebaseDefaultTaxonomy, loadFirebaseManagedSettings } from "./lib/firebaseTaxonomy";
+import { ensureFirebaseDefaultTaxonomy, loadFirebaseManagedSettings, createFirebasePillar, renameFirebasePillar, createFirebaseCategory, renameFirebaseCategory, setFirebaseCategoryLock, softDeleteFirebaseTaxonomy } from "./lib/firebaseTaxonomy";
 import { uploadFirebaseAsset, deleteFirebaseAsset } from "./lib/firebaseAssetStorage";
 import {
   getAuthRole,
@@ -3445,26 +3445,7 @@ function SettingsPage() {
       const originalPillar = pillars.find((pillar) => pillar.id === editingPillarId);
 
       if (editingPillarId && originalPillar) {
-        const { error } = await supabase
-          .from("pillars")
-          .update({ name: trimmed })
-          .eq("id", editingPillarId);
-
-        if (error) throw error;
-
-        const { data: bookRows } = await supabase
-          .from("books")
-          .select("id, pillar")
-          .eq("pillar", originalPillar.name);
-
-        if (bookRows && bookRows.length > 0) {
-          const { error: updateBookError } = await supabase
-            .from("books")
-            .update({ pillar: trimmed })
-            .in("id", bookRows.map((book) => book.id));
-
-          if (updateBookError) throw updateBookError;
-        }
+        await renameFirebasePillar(editingPillarId, originalPillar.name, trimmed);
 
         await logAdminAction({
           action: "pillar_updated",
@@ -3475,13 +3456,7 @@ function SettingsPage() {
         });
         showToast("Pillar updated successfully.", "success");
       } else {
-        const { data, error } = await supabase
-          .from("pillars")
-          .insert({ name: trimmed })
-          .select("id")
-          .single();
-
-        if (error) throw error;
+        const data = await createFirebasePillar(trimmed);
         await logAdminAction({ action: "pillar_created", targetType: "pillar", targetId: data.id, targetName: trimmed, details: { name: trimmed } });
         showToast("Pillar added successfully.", "success");
       }
@@ -3533,27 +3508,7 @@ function SettingsPage() {
         : null;
 
       if (editingCategoryId && originalCategory) {
-        const { error } = await supabase
-          .from("categories")
-          .update({ name: trimmed })
-          .eq("id", editingCategoryId);
-
-        if (error) throw error;
-
-        const { data: matchingBooks } = await supabase
-          .from("books")
-          .select("id, pillar, subcategory")
-          .eq("pillar", selectedPillar.name)
-          .eq("subcategory", originalCategory.name);
-
-        if (matchingBooks && matchingBooks.length > 0) {
-          const { error: updateBooksError } = await supabase
-            .from("books")
-            .update({ subcategory: trimmed })
-            .in("id", matchingBooks.map((book) => book.id));
-
-          if (updateBooksError) throw updateBooksError;
-        }
+        await renameFirebaseCategory(editingCategoryId, selectedPillar.name, originalCategory.name, trimmed);
 
         await logAdminAction({
           action: "category_updated",
@@ -3564,13 +3519,7 @@ function SettingsPage() {
         });
         showToast("Category updated successfully.", "success");
       } else {
-        const { data, error } = await supabase
-          .from("categories")
-          .insert({ pillar_id: categoryPillarId, name: trimmed })
-          .select("id")
-          .single();
-
-        if (error) throw error;
+        const data = await createFirebaseCategory(categoryPillarId, trimmed);
         await logAdminAction({
           action: "category_created",
           targetType: "category",
@@ -3601,12 +3550,7 @@ function SettingsPage() {
     const nextLocked = !Boolean(category.is_locked);
 
     try {
-      const { error } = await supabase
-        .from("categories")
-        .update({ is_locked: nextLocked })
-        .eq("id", category.id);
-
-      if (error) throw error;
+      await setFirebaseCategoryLock(category.id, nextLocked);
 
       await logAdminAction({
         action: nextLocked ? "category_locked" : "category_unlocked",
@@ -3645,12 +3589,7 @@ function SettingsPage() {
 
     try {
       if (target.type === "pillar") {
-        const { data: deleted, error } = await supabase.rpc("soft_delete_pillar", {
-          p_pillar_id: target.id,
-        });
-
-        if (error) throw error;
-        if (!deleted) throw new Error("This pillar could not be found or is already deleted.");
+        await softDeleteFirebaseTaxonomy("pillar", target.id);
 
         await logAdminAction({
           action: "pillar_deleted",
@@ -3664,12 +3603,7 @@ function SettingsPage() {
 
       if (target.type === "category") {
         const targetPillar = pillars.find((pillar) => pillar.id === target.pillar_id);
-        const { data: deleted, error } = await supabase.rpc("soft_delete_category", {
-          p_category_id: target.id,
-        });
-
-        if (error) throw error;
-        if (!deleted) throw new Error("This category could not be found or is already deleted.");
+        await softDeleteFirebaseTaxonomy("category", target.id);
 
         await logAdminAction({
           action: "category_deleted",
