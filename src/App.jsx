@@ -72,13 +72,7 @@ function isOptimizedBookCoverUrl(value) {
 }
 
 async function loadCoverOptimizationState() {
-  const { data, error } = await supabase
-    .from("app_settings")
-    .select("value")
-    .eq("key", COVER_OPTIMIZATION_SETTING_KEY)
-    .maybeSingle();
-  if (error) throw error;
-  const value = data?.value;
+  const { value } = await getAdminSetting(COVER_OPTIMIZATION_SETTING_KEY);
   return value && typeof value === "object" && Array.isArray(value.attemptedBookIds)
     ? value
     : { version: 1, attemptedBookIds: [], optimized: 0, skipped: 0, failed: 0 };
