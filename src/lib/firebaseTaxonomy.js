@@ -126,18 +126,21 @@ export async function softDeleteFirebaseTaxonomy(targetType, targetId) {
   const pillar = pillarSnapshot?.docs[0]?.data();
   const category = categorySnapshot?.docs[0]?.data();
   const target = pillar || category;
+  const categoryPillarSnapshot = category?.pillar_id
+    ? await getDocs(query(pillarsRef, where("__name__", "==", category.pillar_id)))
+    : null;
+  const categoryPillarName = categoryPillarSnapshot?.docs[0]?.data()?.name || "";
   if (!target || !active(target)) throw new Error("The selected record could not be found or is already deleted.");
   const timestamp = new Date().toISOString();
   const ops = [];
   if (targetType === "pillar") {
     const categories = rows(await getDocs(query(categoriesRef, where("pillar_id", "==", targetId)))).filter(active);
-    const categoryIds = new Set(categories.map((item) => item.id));
     ops.push((batch) => batch.update(doc(pillarsRef, targetId), { deleted_at: timestamp, updated_at: serverTimestamp() }));
     categories.forEach((item) => ops.push((batch) => batch.update(doc(categoriesRef, item.id), { deleted_at: timestamp, updated_at: serverTimestamp() })));
     booksSnapshot.docs.filter((book) => book.data().pillar === target.name).forEach((book) => ops.push((batch) => batch.update(book.ref, { deleted_at: timestamp, updated_at: serverTimestamp() })));
   } else {
     ops.push((batch) => batch.update(doc(categoriesRef, targetId), { deleted_at: timestamp, updated_at: serverTimestamp() }));
-    booksSnapshot.docs.filter((book) => book.data().pillar === (target.pillar_name || "") && book.data().subcategory === target.name).forEach((book) => ops.push((batch) => batch.update(book.ref, { deleted_at: timestamp, updated_at: serverTimestamp() })));
+    booksSnapshot.docs.filter((book) => book.data().pillar === categoryPillarName && book.data().subcategory === target.name).forEach((book) => ops.push((batch) => batch.update(book.ref, { deleted_at: timestamp, updated_at: serverTimestamp() })));
   }
   await commitChunks(ops);
   return true;
