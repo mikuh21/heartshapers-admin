@@ -16,60 +16,98 @@ service cloud.firestore {
         );
     }
 
-    // Admin dashboard data. Privileged app settings and audit records are
-    // accessed through callable Cloud Functions, not direct client writes.
+    function ownsRecord() {
+      return signedIn() && resource.data.get('user_id', '') == request.auth.uid;
+    }
+
+    // Catalog metadata is readable to signed-in customers only while active.
+    // Administrators can read and manage active or soft-deleted records.
     match /books/{bookId} {
-      allow read, create, update, delete: if hasAdminRole();
+      allow read: if hasAdminRole()
+        || (signedIn() && resource.data.get('deleted_at', null) == null);
+      allow create, update, delete: if hasAdminRole();
     }
 
     match /games/{gameId} {
-      allow read, create, update, delete: if hasAdminRole();
+      allow read: if hasAdminRole()
+        || (signedIn() && resource.data.get('deleted_at', null) == null);
+      allow create, update, delete: if hasAdminRole();
+
       match /game_cards/{cardId} {
-        allow read, write: if hasAdminRole();
+        allow read: if hasAdminRole()
+          || (
+            signedIn()
+            && get(/databases/$(database)/documents/games/$(gameId)).data.get('deleted_at', null) == null
+          );
+        allow create, update, delete: if hasAdminRole();
       }
     }
 
     match /pillars/{pillarId} {
-      allow read, create, update, delete: if hasAdminRole();
+      allow read: if hasAdminRole()
+        || (signedIn() && resource.data.get('deleted_at', null) == null);
+      allow create, update, delete: if hasAdminRole();
     }
 
     match /categories/{categoryId} {
-      allow read, create, update, delete: if hasAdminRole();
+      allow read: if hasAdminRole()
+        || (signedIn() && resource.data.get('deleted_at', null) == null);
+      allow create, update, delete: if hasAdminRole();
     }
 
+    // Profile documents are owner-readable. Users may update profile display
+    // fields only; access/role/verification flags remain server-controlled.
+    match /users/{userId} {
+      allow read: if hasAdminRole() || (signedIn() && request.auth.uid == userId);
+      allow create, delete: if false;
+      allow update: if signedIn()
+        && request.auth.uid == userId
+        && request.resource.data.diff(resource.data).affectedKeys()
+          .hasOnly(['full_name', 'avatar_path', 'updated_at'])
+        && request.resource.data.get('role', resource.data.get('role', 'user'))
+          == resource.data.get('role', 'user')
+        && request.resource.data.get('membership_tier', resource.data.get('membership_tier', 'regular'))
+          == resource.data.get('membership_tier', 'regular')
+        && request.resource.data.get('disabled', resource.data.get('disabled', false))
+          == resource.data.get('disabled', false)
+        && request.resource.data.get('email_verified', resource.data.get('email_verified', false))
+          == resource.data.get('email_verified', false);
+    }
+
+    // Payment submission records are read-only from the clients. Trusted
+    // callables validate item price, cart totals, ownership, and review status.
     match /payment_submissions/{paymentId} {
-      allow read: if hasAdminRole();
-      allow write: if false;
+      allow read: if hasAdminRole() || ownsRecord();
+      allow create, update, delete: if false;
     }
 
     match /game_payment_submissions/{paymentId} {
-      allow read: if hasAdminRole();
-      allow write: if false;
-    }
-
-    // User records, purchases, app settings, and audit logs are managed via
-    // trusted Cloud Functions or separate client rules scoped to the user app.
-    match /users/{userId} {
-      allow read, write: if false;
+      allow read: if hasAdminRole() || ownsRecord();
+      allow create, update, delete: if false;
     }
 
     match /book_purchases/{purchaseId} {
-      allow read, write: if false;
+      allow read: if hasAdminRole() || ownsRecord();
+      allow create, update, delete: if false;
     }
 
     match /game_purchases/{purchaseId} {
-      allow read, write: if false;
+      allow read: if hasAdminRole() || ownsRecord();
+      allow create, update, delete: if false;
     }
 
+    // Mobile clients can retrieve payment configuration needed at checkout.
+    // Settings mutations and audit history are Cloud-Function-only.
     match /app_settings/{settingId} {
-      allow read, write: if false;
+      allow read: if hasAdminRole()
+        || (signedIn() && settingId == 'payment_settings');
+      allow create, update, delete: if false;
     }
 
     match /admin_logs/{logId} {
       allow read, write: if false;
     }
 
-    // Default deny: all collections not explicitly declared above.
     match /{document=**} {
       allow read, write: if false;
     }
