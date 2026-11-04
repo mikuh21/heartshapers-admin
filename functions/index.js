@@ -7,8 +7,10 @@ const db = getFirestore();
 
 function requireAdmin(request) {
   if (!request.auth) throw new HttpsError("unauthenticated", "Sign in to review payments.");
-  const role = String(request.auth.token.role || request.auth.token.roles || "").toLowerCase();
-  if (!["admin", "super_admin"].includes(role)) {
+  const rawRoles = request.auth.token.roles;
+  const roles = [...(Array.isArray(rawRoles) ? rawRoles : [rawRoles]), request.auth.token.role]
+    .map((value) => String(value || "").trim().toLowerCase()).filter(Boolean);
+  if (!roles.some((role) => ["admin", "super_admin"].includes(role))) {
     throw new HttpsError("permission-denied", "Only administrators can review payments.");
   }
 }
