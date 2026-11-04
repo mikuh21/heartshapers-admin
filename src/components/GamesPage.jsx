@@ -85,22 +85,8 @@ async function loadPdfCardImageOptimizationState() {
 }
 
 async function savePdfCardImageOptimizationState(state) {
-  const { data: sessionData, error: sessionError } = await supabase.auth.getSession();
-  const userId = sessionData?.session?.user?.id;
-  if (sessionError || !userId) {
-    const error = new Error("Your admin session has expired. Sign in again before continuing PDF card image optimization.");
-    error.code = "ADMIN_SESSION_EXPIRED";
-    throw error;
-  }
-  const { error } = await supabase.from("app_settings").upsert({
-    key: PDF_CARD_IMAGE_OPTIMIZATION_KEY,
-    value: state,
-    updated_at: new Date().toISOString(),
-    updated_by: userId
-  }, { onConflict: "key" });
-  if (error) throw error;
+  await setAdminSetting(PDF_CARD_IMAGE_OPTIMIZATION_KEY, state);
 }
-
 async function optimizeExistingPdfCardImage(url) {
   if (!url || typeof createImageBitmap !== "function" || typeof document === "undefined") {
     throw new Error("This browser does not support PDF card image optimization.");
