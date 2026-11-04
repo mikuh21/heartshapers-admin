@@ -45,8 +45,15 @@ service firebase.storage {
       allow delete: if hasAdminRole();
     }
 
-    // Payment QR codes may be viewed by signed-in customers; only admins can
-    // upload, replace, list, or remove them.
+    // Payment QR assets currently use the settings/ prefix in the admin UI.
+    // Signed-in customers can display QR images; only admins can mutate them.
+    match /settings/{assetPath=**} {
+      allow get: if signedIn();
+      allow list: if hasAdminRole();
+      allow create, update: if hasAdminRole() && validImageUpload();
+      allow delete: if hasAdminRole();
+    }
+
     match /payment-qr/{assetPath=**} {
       allow get: if signedIn();
       allow list: if hasAdminRole();
@@ -56,7 +63,8 @@ service firebase.storage {
 
     // Payment evidence contains private customer information.
     match /payment-proofs/{assetPath=**} {
-      allow read, write: if hasAdminRole();
+      allow read: if hasAdminRole();
+      allow write: if false;
     }
 
     match /{assetPath=**} {
