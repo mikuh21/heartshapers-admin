@@ -142,3 +142,28 @@ export async function loadFirebasePlacementNames(placements) {
     categoryName: categoryNames.get(placement.category_id) || "Unknown category"
   }));
 }
+
+export async function updateFirebaseGameWithCover(gameId, isLocked, changes = {}, coverFile = null) {
+  const gameRef = doc(firestore, "games", gameId);
+  const snapshot = await getDoc(gameRef);
+  if (!snapshot.exists() || snapshot.data().deleted_at) throw new Error("This game could not be found or has been deleted.");
+  const update = {
+    is_locked: isLocked,
+    updated_at: serverTimestamp()
+  };
+  for (const key of ["title", "subtitle", "description", "price", "sort_order"]) {
+    if (changes[key] !== undefined) update[key] = key === "price" ? Number(changes[key]) || 0 : changes[key];
+  }
+  let coverDisplayUrl = null;
+  if (coverFile) {
+    const extension = { "image/jpeg": "jpg", "image/png": "png", "image/webp": "webp" }[coverFile.type];
+    if (!extension) throw new Error("Choose a JPEG, PNG, or WebP cover image.");
+    const path = `games/${gameId}/cover/${crypto.randomUUID()}.${extension}`;
+    const uploaded = await uploadFirebaseAsset(path, coverFile, coverFile.type);
+    update.cover_image_url = uploaded.path;
+    coverDisplayUrl = uploaded.downloadUrl;
+  }
+  await updateDoc(gameRef, update);
+  if (!coverDisplayUrl) coverDisplayUrl = await resolveCover({ ...snapshot.data(), ...update, id: gameId });
+  return { id: gameId, ...snapshot.data(), ...update, cover_display_url: coverDisplayUrl };
+}
