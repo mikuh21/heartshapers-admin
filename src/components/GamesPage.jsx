@@ -29,7 +29,7 @@ import { getFirebaseAssetDownloadUrl } from "../lib/firebaseAssetStorage";
 import { firestore } from "../lib/firebase";
 import { collection, getDocs } from "firebase/firestore";
 import { getFunctions, httpsCallable } from "firebase/functions";
-import { firebaseApp } from "../lib/firebase";
+import { firebaseApp, firebaseAuth } from "../lib/firebase";
 const adminFunctions = getFunctions(firebaseApp, "asia-southeast1");
 const getAdminSetting = async (key) => (await httpsCallable(adminFunctions, "getAdminSetting")({ key })).data;
 const setAdminSetting = async (key, value) => (await httpsCallable(adminFunctions, "setAdminSetting")({ key, value })).data;
@@ -833,8 +833,8 @@ export default function GamesPage({ canManageGames, ConfirmModal, showToast }) {
     let active = true;
 
     const runOptimization = async () => {
-      const { data: authData, error: authError } = await supabase.auth.getUser();
-      if (authError || !authData?.user) {
+      const currentAdmin = firebaseAuth.currentUser;
+      if (!currentAdmin) {
         showToast("Your admin session has expired. Sign in again before optimizing game covers.", "error");
         return;
       }
@@ -1183,7 +1183,7 @@ export default function GamesPage({ canManageGames, ConfirmModal, showToast }) {
           <div className="empty-state">
             <Gamepad2 size={34} />
             <strong>{games.length === 0 ? "No games found" : "No matching games"}</strong>
-            <span>{games.length === 0 ? "Games stored in Supabase will appear here." : "Try changing your search or filters."}</span>
+            <span>{games.length === 0 ? "Games will appear here when available." : "Try changing your search or filters."}</span>
           </div>
         ) : (
           <div className="table-wrap">
