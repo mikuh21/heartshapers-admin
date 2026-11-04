@@ -32,7 +32,8 @@ import {
 import { supabase, COVER_BUCKET, PDF_BUCKET } from "./lib/supabase";
 import { getFunctions, httpsCallable } from "firebase/functions";
 import { ref as firebaseStorageRef, getDownloadURL } from "firebase/storage";
-import { firebaseApp, firebaseAuth, firebaseStorage } from "./lib/firebase";
+import { firebaseApp, firebaseAuth, firebaseStorage, firestore } from "./lib/firebase";
+import { collection, getDocs, query, orderBy } from "firebase/firestore";
 import { signInWithEmailAndPassword, signOut as firebaseSignOut, getIdTokenResult } from "firebase/auth";
 import heartshapersLogo from "./assets/heartshapers-logo.svg?no-inline";
 import {
@@ -3236,17 +3237,40 @@ function PaymentsPage({ canManagePayments }) {
     const requestSequence = ++loadSequence.current;
     setLoading(true);
     setError("");
-    const [bookResult, gameResult, userRows] = await Promise.all([
-      supabase.from("payment_submissions").select("*, books(title, price)").order("created_at", { ascending: false }),
-      supabase.from("game_payment_submissions").select("*, games(title, price)").order("created_at", { ascending: false }),
-      listUsers().catch(() => [])
-    ]);
+    let bookRows = [];
+    let gameRows = [];
+    let userRows = [];
+    try {
+      const [bookSubmissions, gameSubmissions, bookCatalog, gameCatalog, loadedUsers] = await Promise.all([
+        getDocs(query(collection(firestore, "payment_submissions"), orderBy("created_at", "desc"))),
+        getDocs(query(collection(firestore, "game_payment_submissions"), orderBy("created_at", "desc"))),
+        getDocs(collection(firestore, "books")),
+        getDocs(collection(firestore, "games")),
+        listUsers().catch(() => [])
+      ]);
+      const booksById = new Map(bookCatalog.docs.map((doc) => [doc.id, { id: doc.id, ...doc.data() }]));
+      const gamesById = new Map(gameCatalog.docs.map((doc) => [doc.id, { id: doc.id, ...doc.data() }]));
+      bookRows = bookSubmissions.docs.map((doc) => {
+        const row = { id: doc.id, ...doc.data() };
+        const bookId = row.book_id || row.item_id;
+        return { ...row, item_type: "book", item: booksById.get(bookId) || null, book_id: bookId };
+      });
+      gameRows = gameSubmissions.docs.map((doc) => {
+        const row = { id: doc.id, ...doc.data() };
+        const gameId = row.game_id || row.item_id;
+        return { ...row, item_type: "game", item: gamesById.get(gameId) || null, game_id: gameId };
+      });
+      userRows = loadedUsers;
+    } catch (loadError) {
+      if (requestSequence !== loadSequence.current) return;
+      setError(loadError?.message || "Unable to load payment submissions from Firebase.");
+      setLoading(false);
+      return;
+    }
     if (requestSequence !== loadSequence.current) return;
-    const paymentError = bookResult.error || gameResult.error;
-    if (paymentError) setError(paymentError.message);
     const rawRows = [
-      ...(bookResult.data || []).map((row) => ({ ...row, item_type: "book", item: row.books, book_id: row.book_id })),
-      ...(gameResult.data || []).map((row) => ({ ...row, item_type: "game", item: row.games, game_id: row.game_id }))
+      ...bookRows,
+      ...gameRows
     ];
     const grouped = new Map();
     for (const row of rawRows) {
