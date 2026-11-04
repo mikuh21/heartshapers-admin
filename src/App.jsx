@@ -46,6 +46,7 @@ import {
 import { logAdminAction } from "./lib/adminAudit";
 import GamesPage from "./components/GamesPage";
 import { listFirebaseBooks, softDeleteFirebaseBook, updateFirebaseBookCover } from "./lib/firebaseBooks";
+import { ensureFirebaseDefaultTaxonomy, loadFirebaseManagedSettings } from "./lib/firebaseTaxonomy";
 import { uploadFirebaseAsset, deleteFirebaseAsset } from "./lib/firebaseAssetStorage";
 import {
   getAuthRole,
@@ -356,114 +357,24 @@ function sortCategoryNames(categoryNames = []) {
 }
 
 async function ensureDefaultManagedSettings() {
-  const { data: pillarRows, error: pillarError } = await supabase
-    .from("pillars")
-    .select("id, name");
-
-  if (pillarError) throw pillarError;
-
-  const existingPillarNames = new Map((pillarRows || []).map((pillar) => [String(pillar.name).trim().toLowerCase(), pillar]));
-  const newPillars = DEFAULT_PILLAR_OPTIONS.filter((pillar) => !existingPillarNames.has(pillar.trim().toLowerCase()));
-
-  if (newPillars.length > 0) {
-    const { error: insertPillarError } = await supabase
-      .from("pillars")
-      .insert(newPillars.map((name) => ({ name })));
-
-    if (insertPillarError) throw insertPillarError;
-  }
-
-  const { data: allPillars, error: allPillarError } = await supabase
-    .from("pillars")
-    .select("id, name");
-
-  if (allPillarError) throw allPillarError;
-
-  const pillarByName = new Map((allPillars || []).map((pillar) => [String(pillar.name).trim().toLowerCase(), pillar]));
-  const { data: categoryRows, error: categoryError } = await supabase
-    .from("categories")
-    .select("id, pillar_id, name");
-
-  if (categoryError) throw categoryError;
-
-  const existingCategoryKeys = new Set((categoryRows || []).map((category) => {
-    const pillarName = (allPillars || []).find((pillar) => pillar.id === category.pillar_id)?.name || "";
-    return `${pillarName.trim().toLowerCase()}::${String(category.name).trim().toLowerCase()}`;
-  }));
-
-  const inserts = [];
-
-  for (const [pillarName, categoryNames] of Object.entries(DEFAULT_CATEGORY_OPTIONS)) {
-    const pillar = pillarByName.get(pillarName.trim().toLowerCase());
-    if (!pillar) continue;
-
-    for (const categoryName of categoryNames) {
-      const key = `${pillarName.trim().toLowerCase()}::${categoryName.trim().toLowerCase()}`;
-      if (!existingCategoryKeys.has(key)) {
-        inserts.push({ pillar_id: pillar.id, name: categoryName });
-      }
-    }
-  }
-
-  if (inserts.length > 0) {
-    const { error: insertCategoryError } = await supabase
-      .from("categories")
-      .insert(inserts);
-
-    if (insertCategoryError) throw insertCategoryError;
-  }
+  await ensureFirebaseDefaultTaxonomy(DEFAULT_PILLAR_OPTIONS, DEFAULT_CATEGORY_OPTIONS);
 }
 
 async function loadManagedSettings() {
-  const { data: pillarRows, error: pillarError } = await supabase
-    .from("pillars")
-    .select("id, name, created_at")
-    .is("deleted_at", null)
-    .order("created_at", { ascending: true });
-
-  if (pillarError) throw pillarError;
-
-  const { data: categoryRows, error: categoryError } = await supabase
-    .from("categories")
-    .select("id, pillar_id, name, created_at, is_locked")
-    .is("deleted_at", null)
-    .order("created_at", { ascending: true });
-
-  if (categoryError) throw categoryError;
-
-  const pillarMap = new Map((pillarRows || []).map((pillar) => [pillar.id, { ...pillar, name: String(pillar.name || "").trim(), categories: [] }]));
-  for (const category of categoryRows || []) {
-    const pillar = pillarMap.get(category.pillar_id);
-    if (!pillar) continue;
-    pillar.categories.push({ ...category, name: String(category.name || "").trim() });
-  }
-
-  return (pillarRows || [])
-    .map((pillar) => {
-      const entry = pillarMap.get(pillar.id);
-      if (!entry) return null;
-      const categoryNames = sortCategoryNames(entry.categories.map((category) => category.name).filter(Boolean));
-      return {
-        id: entry.id,
-        name: entry.name,
-        created_at: entry.created_at,
-        categories: categoryNames.map((categoryName) => ({
-          id: (entry.categories.find((category) => category.name === categoryName) || {}).id,
-          name: categoryName,
-          pillar_id: entry.id,
-          is_locked: Boolean((entry.categories.find((category) => category.name === categoryName) || {}).is_locked)
-        }))
-      };
-    })
-    .filter(Boolean)
-    .sort((left, right) => {
-      const leftOrder = DEFAULT_PILLAR_OPTIONS.indexOf(left.name);
-      const rightOrder = DEFAULT_PILLAR_OPTIONS.indexOf(right.name);
-      if (leftOrder !== -1 && rightOrder !== -1) return leftOrder - rightOrder;
-      if (leftOrder !== -1) return -1;
-      if (rightOrder !== -1) return 1;
-      return left.name.localeCompare(right.name);
-    });
+  const rows = await loadFirebaseManagedSettings();
+  return rows.map((pillar) => ({
+    ...pillar,
+    categories: sortCategoryNames(pillar.categories.map((category) => category.name).filter(Boolean)).map((name) =>
+      pillar.categories.find((category) => category.name === name)
+    )
+  })).sort((left, right) => {
+    const leftOrder = DEFAULT_PILLAR_OPTIONS.indexOf(left.name);
+    const rightOrder = DEFAULT_PILLAR_OPTIONS.indexOf(right.name);
+    if (leftOrder !== -1 && rightOrder !== -1) return leftOrder - rightOrder;
+    if (leftOrder !== -1) return -1;
+    if (rightOrder !== -1) return 1;
+    return left.name.localeCompare(right.name);
+  });
 }
 
 function normalizeFilterValue(value) {
