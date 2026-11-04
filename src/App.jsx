@@ -34,7 +34,7 @@ import { getFunctions, httpsCallable } from "firebase/functions";
 import { ref as firebaseStorageRef, getDownloadURL } from "firebase/storage";
 import { firebaseApp, firebaseAuth, firebaseStorage, firestore } from "./lib/firebase";
 import { collection, doc, getDocs, query, where, orderBy, setDoc, updateDoc, serverTimestamp } from "firebase/firestore";
-import { signInWithEmailAndPassword, signOut as firebaseSignOut, getIdTokenResult } from "firebase/auth";
+import { signInWithEmailAndPassword, signOut as firebaseSignOut, getIdTokenResult, sendPasswordResetEmail } from "firebase/auth";
 import heartshapersLogo from "./assets/heartshapers-logo.svg?no-inline";
 import {
   DEFAULT_UPLOAD_SETTINGS,
@@ -3307,13 +3307,11 @@ function SettingsPage() {
 
   async function resetPassword() {
     try {
-      const { data, error: userError } = await supabase.auth.getUser();
-      if (userError) throw userError;
-      const email = data.user?.email;
-      if (!email) throw new Error("Unable to find the current admin email.");
+      const currentAdmin = firebaseAuth.currentUser;
+      const email = currentAdmin?.email;
+      if (!currentAdmin || !email) throw new Error("Unable to find the current Firebase admin account.");
 
-      const { error } = await supabase.auth.resetPasswordForEmail(email);
-      if (error) throw error;
+      await sendPasswordResetEmail(firebaseAuth, email);
       await logAdminAction({
         action: "password_reset_requested",
         targetType: "admin_account",
