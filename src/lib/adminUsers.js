@@ -1,4 +1,3 @@
-import { supabase } from "./supabase";
 import { getFunctions, httpsCallable } from "firebase/functions";
 import { firebaseApp } from "./firebase";
 
@@ -15,11 +14,6 @@ async function callUserManagement(name, payload = {}) {
     throw new Error(String(error?.message || "User management is unavailable right now."));
   }
 }
-
-const ADMIN_USERS_FUNCTION =
-  import.meta.env.VITE_ADMIN_USER_FUNCTION || "admin-user-management";
-const ADMIN_MANAGEMENT_FUNCTION =
-  import.meta.env.VITE_ADMIN_MANAGEMENT_FUNCTION || "admin-management";
 
 export const ADMIN_WEB_ALLOWED_ROLES = ["admin", "super_admin"];
 export const NORMAL_MOBILE_ROLE = "user";
@@ -118,33 +112,9 @@ export async function listUsers() {
   return (Array.isArray(data.users) ? data.users : []).map(normalizeUser);
 }
 
+
 export async function getBookUserAccess(bookId) {
-  const { data, error } = await supabase.functions.invoke(ADMIN_USERS_FUNCTION, {
-    body: { action: "book-access", bookId }
-  });
-
-  if (error) {
-    const response = error.context;
-    let backendError = null;
-    if (response && typeof response.clone === "function") {
-      backendError = (await response.clone().json().catch(() => null))?.error || null;
-    }
-    console.error("User access Edge Function request failed.", {
-      status: response?.status || error.status || null,
-      code: error.code || error.name || "FUNCTION_REQUEST_FAILED",
-      message: backendError || error.message || "Unknown function error"
-    });
-    throw new Error("Unable to load user access information.");
-  }
-
-  if (data?.error) {
-    console.error("User access Edge Function returned an error.", {
-      code: data.code || "BOOK_ACCESS_FAILED",
-      message: data.error
-    });
-    throw new Error("Unable to load user access information.");
-  }
-
+  const data = await callUserManagement("getManagedBookUserAccess", { bookId });
   return {
     book: data.book,
     users: (data.users || []).map(normalizeUser),
@@ -154,32 +124,12 @@ export async function getBookUserAccess(bookId) {
 }
 
 export async function updateBookUserAccess({ bookId, userId, accessStatus }) {
-  const { data, error } = await supabase.functions.invoke(ADMIN_USERS_FUNCTION, {
-    body: { action: "set-book-access", bookId, userId, accessStatus }
-  });
-
-  if (error || data?.error) {
-    throw new Error(data?.error === "Verified purchases cannot be changed here."
-      ? data.error
-      : "Unable to update user access.");
-  }
-
-  return data?.accessStatus;
+  const data = await callUserManagement("setManagedBookUserAccess", { bookId, userId, accessStatus });
+  return data.accessStatus;
 }
 
 export async function getGameUserAccess(gameId) {
-  const { data, error } = await supabase.functions.invoke(ADMIN_USERS_FUNCTION, {
-    body: { action: "game-access", gameId }
-  });
-
-  if (error || data?.error) {
-    console.error("Game user access request failed.", {
-      code: error?.code || error?.name || data?.code || "GAME_ACCESS_FAILED",
-      message: data?.error || error?.message || "Unknown function error"
-    });
-    throw new Error("Unable to load game user access information.");
-  }
-
+  const data = await callUserManagement("getManagedGameUserAccess", { gameId });
   return {
     game: data.game,
     users: (data.users || []).map(normalizeUser),
@@ -189,21 +139,8 @@ export async function getGameUserAccess(gameId) {
 }
 
 export async function updateGameUserAccess({ gameId, userId, accessStatus }) {
-  const { data, error } = await supabase.functions.invoke(ADMIN_USERS_FUNCTION, {
-    body: { action: "set-game-access", gameId, userId, accessStatus }
-  });
-
-  if (error || data?.error) {
-    console.error("Game user access update failed.", {
-      code: error?.code || error?.name || data?.code || "GAME_ACCESS_UPDATE_FAILED",
-      message: data?.error || error?.message || "Unknown function error"
-    });
-    throw new Error(data?.error === "Verified purchases cannot be changed here."
-      ? data.error
-      : "Unable to update game user access.");
-  }
-
-  return data?.accessStatus;
+  const data = await callUserManagement("setManagedGameUserAccess", { gameId, userId, accessStatus });
+  return data.accessStatus;
 }
 
 export async function updateUserStatus(userId, disabled) {
