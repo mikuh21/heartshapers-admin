@@ -29,7 +29,7 @@ import {
   ZoomOut,
   RotateCcw
 } from "lucide-react";
-import { supabase, COVER_BUCKET, PDF_BUCKET } from "./lib/supabase";
+
 import { getFunctions, httpsCallable } from "firebase/functions";
 import { ref as firebaseStorageRef, getDownloadURL } from "firebase/storage";
 import { firebaseApp, firebaseAuth, firebaseStorage, firestore } from "./lib/firebase";
@@ -3252,8 +3252,13 @@ function SettingsPage() {
         const qrPaths = Array.isArray(nextPaymentSettings.qr_image_urls) ? nextPaymentSettings.qr_image_urls : [];
         const nextPreviews = await Promise.all(qrPaths.map(async (path) => {
           if (/^https?:\/\//i.test(path)) return { path, url: path };
-          const { data, error } = await supabase.storage.from(PAYMENT_PROOF_BUCKET).createSignedUrl(path, 3600);
-          return { path, url: error ? "" : (data?.signedUrl || "") };
+          try {
+            const url = await getDownloadURL(firebaseStorageRef(firebaseStorage, path));
+            return { path, url };
+          } catch (storageError) {
+            console.error("Unable to resolve Firebase payment QR asset.", { code: storageError?.code || "STORAGE_READ_FAILED" });
+            return { path, url: "" };
+          }
         }));
         setPaymentQrPreviews(nextPreviews.filter((item) => item.url));
       } catch (err) {
@@ -3368,8 +3373,7 @@ function SettingsPage() {
     setPaymentSettingsLoading(true);
     try {
       const path = `settings/${crypto.randomUUID()}-${file.name.toLowerCase().replace(/[^a-z0-9._-]/g, "-")}`;
-      const { error: uploadError } = await supabase.storage.from(PAYMENT_PROOF_BUCKET).upload(path, file, { upsert: false, contentType: file.type });
-      if (uploadError) throw uploadError;
+      const uploaded = await uploadFirebaseAsset(path, file, file.type || "image/png");
       await logAdminAction({
         action: "payment_qr_uploaded",
         targetType: "app_setting",
@@ -3377,13 +3381,13 @@ function SettingsPage() {
         targetName: "GCash QR Code",
         details: { file_type: file.type || "image/unknown" }
       });
-      const { data } = await supabase.storage.from(PAYMENT_PROOF_BUCKET).createSignedUrl(path, 3600);
+      const previewUrl = uploaded.downloadUrl;
       setPaymentSettings((current) => {
         const currentPaths = Array.isArray(current.qr_image_urls) ? current.qr_image_urls : (current.qr_image_url ? [current.qr_image_url] : []);
         const nextPaths = [...new Set([...currentPaths, path])];
         return { ...current, qr_image_urls: nextPaths, qr_image_url: nextPaths[0] || "" };
       });
-      if (data?.signedUrl) setPaymentQrPreviews((current) => [...current, { path, url: data.signedUrl }]);
+      if (previewUrl) setPaymentQrPreviews((current) => [...current, { path, url: previewUrl }]);
       showToast("QR code uploaded. Save payment settings to apply it.", "success");
     } catch (err) {
       await logAdminAction({
