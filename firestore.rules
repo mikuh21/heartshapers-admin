@@ -8,10 +8,10 @@ service cloud.firestore {
     function hasAdminRole() {
       return signedIn()
         && (
-          request.auth.token.role in ['admin', 'super_admin']
+          request.auth.token.get('role', '') in ['admin', 'super_admin']
           || (
-            request.auth.token.roles is list
-            && request.auth.token.roles.hasAny(['admin', 'super_admin'])
+            request.auth.token.get('roles', []) is list
+            && request.auth.token.get('roles', []).hasAny(['admin', 'super_admin'])
           )
         );
     }
