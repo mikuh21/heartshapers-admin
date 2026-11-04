@@ -135,3 +135,78 @@ exports.updateManagedAdminStatus = onCall({ region: REGION }, async (request) =>
   await db.collection("users").doc(String(userId)).set({ disabled, updated_at: FieldValue.serverTimestamp() }, { merge: true });
   return { admin: publicUser({ ...target, disabled }) };
 });
+
+
+// Per-user book/game access overrides. Purchase records created by reviewCartPayment
+// use stable IDs: {userId}_{bookId} and {userId}_{gameId}.
+function validAccessStatus(value) {
+  return value === "free" || value === "locked";
+}
+async function managedAccessUsers() {
+  return (await listAllUsers()).filter((user) =>
+    !["admin", "super_admin"].includes(String(user.customClaims?.role || "").toLowerCase())
+  ).map(publicUser);
+}
+async function readUserAccess(request, itemId, itemCollection, purchaseCollection, overrideCollection, itemField, label) {
+  requireAdmin(request);
+  const id = String(itemId || "").trim();
+  if (!id) throw new HttpsError("invalid-argument", `A ${label} ID is required.`);
+  const itemSnapshot = await db.collection(itemCollection).doc(id).get();
+  if (!itemSnapshot.exists || itemSnapshot.data().deleted_at) {
+    throw new HttpsError("not-found", `The ${label} was not found or has been deleted.`);
+  }
+  const [users, purchasesSnapshot, overridesSnapshot] = await Promise.all([
+    managedAccessUsers(),
+    db.collection(purchaseCollection).where(itemField, "==", id).get(),
+    db.collection(overrideCollection).where(itemField, "==", id).get()
+  ]);
+  const purchasedUserIds = [...new Set(purchasesSnapshot.docs.map((doc) => String(doc.data().user_id || "")).filter(Boolean))];
+  const accessOverrides = overridesSnapshot.docs.map((doc) => ({ id: doc.id, ...doc.data() }));
+  return { [label]: { id: itemSnapshot.id, ...itemSnapshot.data() }, users, purchasedUserIds, accessOverrides };
+}
+exports.getManagedBookUserAccess = onCall({ region: REGION }, async (request) =>
+  readUserAccess(request, request.data?.bookId, "books", "book_purchases", "user_book_access", "book_id", "book")
+);
+exports.getManagedGameUserAccess = onCall({ region: REGION }, async (request) =>
+  readUserAccess(request, request.data?.gameId, "games", "game_purchases", "user_game_access", "game_id", "game")
+);
+async function setManagedUserAccess(request, itemId, userId, accessStatus, itemCollection, purchaseCollection, overrideCollection, itemField, label) {
+  requireAdmin(request);
+  const id = String(itemId || "").trim();
+  const uid = String(userId || "").trim();
+  if (!id || !uid || !validAccessStatus(accessStatus)) {
+    throw new HttpsError("invalid-argument", "Invalid access override details.");
+  }
+  const itemRef = db.collection(itemCollection).doc(id);
+  const userRef = db.collection("users").doc(uid);
+  const purchaseRef = db.collection(purchaseCollection).doc(`${uid}_${id}`);
+  const overrideRef = db.collection(overrideCollection).doc(`${uid}_${id}`);
+  return db.runTransaction(async (tx) => {
+    const [itemSnap, userSnap, purchaseSnap, overrideSnap] = await Promise.all([
+      tx.get(itemRef), tx.get(userRef), tx.get(purchaseRef), tx.get(overrideRef)
+    ]);
+    if (!itemSnap.exists || itemSnap.data().deleted_at) throw new HttpsError("not-found", `The ${label} was not found or has been deleted.`);
+    if (!userSnap.exists || String(userSnap.data().role || "user").toLowerCase() !== "user") {
+      throw new HttpsError("not-found", "The selected user was not found.");
+    }
+    if (purchaseSnap.exists) throw new HttpsError("failed-precondition", "Verified purchases cannot be changed here.");
+    const now = FieldValue.serverTimestamp();
+    tx.set(overrideRef, {
+      user_id: uid, [itemField]: id, access_status: accessStatus,
+      updated_at: now, updated_by: request.auth.uid
+    }, { merge: true });
+    tx.set(db.collection("admin_logs").doc(), {
+      action: `${label}_user_access_updated`,
+      admin_email: request.auth.token.email || "",
+      details: { user_id: uid, [itemField]: id, access_status: accessStatus, previous_access_status: overrideSnap.exists ? overrideSnap.data().access_status || null : null },
+      created_at: now
+    });
+    return { accessStatus };
+  });
+}
+exports.setManagedBookUserAccess = onCall({ region: REGION }, async (request) =>
+  setManagedUserAccess(request, request.data?.bookId, request.data?.userId, request.data?.accessStatus, "books", "book_purchases", "user_book_access", "book_id", "book")
+);
+exports.setManagedGameUserAccess = onCall({ region: REGION }, async (request) =>
+  setManagedUserAccess(request, request.data?.gameId, request.data?.userId, request.data?.accessStatus, "games", "game_purchases", "user_game_access", "game_id", "game")
+);
