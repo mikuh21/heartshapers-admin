@@ -167,3 +167,14 @@ export async function updateFirebaseGameWithCover(gameId, isLocked, changes = {}
   if (!coverDisplayUrl) coverDisplayUrl = await resolveCover({ ...snapshot.data(), ...update, id: gameId });
   return { id: gameId, ...snapshot.data(), ...update, cover_display_url: coverDisplayUrl };
 }
+
+export async function updateFirebaseGameCover(gameId, currentCoverPath, nextCoverPath) {
+  const gameRef = doc(firestore, "games", gameId);
+  const snapshot = await getDoc(gameRef);
+  if (!snapshot.exists() || snapshot.data().deleted_at) throw new Error("The game could not be found or has been deleted.");
+  if ((snapshot.data().cover_image_url || null) !== (currentCoverPath || null)) {
+    throw new Error("The game cover changed during optimization; the original was retained.");
+  }
+  await updateDoc(gameRef, { cover_image_url: nextCoverPath, updated_at: serverTimestamp() });
+  return { id: gameId };
+}
