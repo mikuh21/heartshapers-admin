@@ -24,7 +24,10 @@ import { gameUploadSizeError, loadGameUploadLimit } from "../lib/uploadSettings"
 import { listFirebaseGamesWithCounts, loadFirebaseGameDetails, loadFirebaseGameAccess, updateFirebaseGameAccess, softDeleteFirebaseGame, updateFirebaseGameWithCover } from "../lib/firebaseGames";
 import { createFirebasePdfGame, downloadFirebasePdfGameSource, updateFirebasePdfGame } from "../lib/firebaseGamePublishing";
 import { uploadFirebaseAsset } from "../lib/firebaseAssetStorage";
-import { updateFirebaseGameCover } from "../lib/firebaseGames";
+import { updateFirebaseGameCover, updateFirebaseGameCardMetadata } from "../lib/firebaseGames";
+import { getFirebaseAssetDownloadUrl } from "../lib/firebaseAssetStorage";
+import { firestore } from "../lib/firebase";
+import { collection, getDocs } from "firebase/firestore";
 import { supabase } from "../lib/supabase";
 
 const CARD_PAGE_SIZE = 20;
@@ -1002,16 +1005,15 @@ export default function GamesPage({ canManageGames, ConfirmModal, showToast }) {
         return;
       }
       const attempted = new Set(state.attemptedCardIds);
-      const { data: cards, error: cardsError } = await supabase
-        .from("game_cards")
-        .select("id,game_id,sort_order,metadata");
-      if (cardsError) {
-        console.error("Unable to list PDF card image assets for optimization.", cardsError);
-        return;
-      }
-      const activeGameIds = new Set(games.map((game) => game.id));
-      const candidates = (cards || []).filter((card) => {
-        if (!activeGameIds.has(card.game_id)) return false;
+      const cardSnapshots = await Promise.all(games.map((game) =>
+        getDocs(collection(firestore, "games", game.id, "game_cards"))
+      ));
+      const cards = cardSnapshots.flatMap((snapshot) => snapshot.docs.map((item) => ({
+        id: item.id,
+        game_id: item.ref.parent.parent?.id,
+        ...item.data()
+      })));
+      const candidates = cards.filter((card) => {
         const metadata = card.metadata && typeof card.metadata === "object" && !Array.isArray(card.metadata)
           ? card.metadata : {};
         const path = String(metadata.pdf_page_path || "");
@@ -1041,34 +1043,16 @@ export default function GamesPage({ canManageGames, ConfirmModal, showToast }) {
         const oldPath = metadata.pdf_page_path;
         let outcome = "failed";
         try {
-          const { data: signedData, error: signedError } = await supabase.storage
-            .from("game-assets").createSignedUrl(oldPath, 300);
-          if (signedError || !signedData?.signedUrl) {
-            throw signedError || new Error("Unable to resolve a temporary card image URL.");
-          }
-          const blob = await optimizeExistingPdfCardImage(signedData.signedUrl);
+          const assetUrl = await getFirebaseAssetDownloadUrl(oldPath);
+          const blob = await optimizeExistingPdfCardImage(assetUrl);
           if (!blob) {
             skippedCount += 1;
             outcome = "skipped";
           } else {
             const uploadedPath = `games/${card.game_id}/cards/optimized-${card.id}-${Date.now()}.webp`;
-            const { error: uploadError } = await supabase.storage.from("game-assets").upload(uploadedPath, blob, {
-              contentType: "image/webp",
-              cacheControl: "31536000",
-              upsert: false
-            });
-            if (uploadError) throw uploadError;
-
+            await uploadFirebaseAsset(uploadedPath, blob, "image/webp");
             const nextMetadata = { ...metadata, pdf_page_path: uploadedPath };
-            const { data, error: updateError } = await supabase.from("game_cards")
-              .update({ metadata: nextMetadata })
-              .eq("id", card.id)
-              .eq("game_id", card.game_id)
-              .eq("metadata", metadata)
-              .select("id")
-              .maybeSingle();
-            if (updateError) throw updateError;
-            if (!data) throw new Error("Card metadata changed during optimization; the original asset remains active.");
+            await updateFirebaseGameCardMetadata(card.game_id, card.id, metadata, nextMetadata);
             optimizedCount += 1;
             outcome = "optimized";
           }
