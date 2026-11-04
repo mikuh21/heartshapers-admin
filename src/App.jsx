@@ -45,6 +45,7 @@ import {
 } from "./lib/uploadSettings";
 import { logAdminAction } from "./lib/adminAudit";
 import GamesPage from "./components/GamesPage";
+import { listFirebaseBooks, softDeleteFirebaseBook } from "./lib/firebaseBooks";
 import {
   getAuthRole,
   isAdminUser,
@@ -1217,14 +1218,12 @@ function Books() {
     setLoading(true);
     setError("");
 
-    const { data, error } = await supabase
-      .from("books")
-      .select("id,title,author,cover_image_url,pdf_url,pillar,subcategory,description,keywords,created_at,is_locked,price")
-      .is("deleted_at", null)
-      .order("created_at", { ascending: false });
-
-    if (error) setError(error.message);
-    else setBooks(data || []);
+    try {
+      const data = await listFirebaseBooks();
+      setBooks(data || []);
+    } catch (loadError) {
+      setError(loadError?.message || "Unable to load books from Firebase.");
+    }
     setLoading(false);
   }
 
@@ -1474,13 +1473,13 @@ function Books() {
   }, [loading, error, books]);
 
   async function deleteBook(book) {
-    const { data, error } = await supabase
-      .from("books")
-      .update({ deleted_at: new Date().toISOString() })
-      .eq("id", book.id)
-      .is("deleted_at", null)
-      .select("id")
-      .maybeSingle();
+    let data = null;
+    let error = null;
+    try {
+      data = await softDeleteFirebaseBook(book.id);
+    } catch (deleteError) {
+      error = deleteError;
+    }
     if (error || !data) {
       await logAdminAction({
         action: "book_delete_failed",
