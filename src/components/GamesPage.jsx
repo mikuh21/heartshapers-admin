@@ -28,20 +28,18 @@ import { updateFirebaseGameCover, updateFirebaseGameCardMetadata } from "../lib/
 import { getFirebaseAssetDownloadUrl } from "../lib/firebaseAssetStorage";
 import { firestore } from "../lib/firebase";
 import { collection, getDocs } from "firebase/firestore";
-import { supabase } from "../lib/supabase";
+import { getFunctions, httpsCallable } from "firebase/functions";
+import { firebaseApp } from "../lib/firebase";
+const adminFunctions = getFunctions(firebaseApp, "asia-southeast1");
+const getAdminSetting = async (key) => (await httpsCallable(adminFunctions, "getAdminSetting")({ key })).data;
+const setAdminSetting = async (key, value) => (await httpsCallable(adminFunctions, "setAdminSetting")({ key, value })).data;
 
 const CARD_PAGE_SIZE = 20;
 
 const GAME_COVER_OPTIMIZATION_KEY = "game_cover_optimization_v1";
 
 async function loadGameCoverOptimizationState() {
-  const { data, error } = await supabase
-    .from("app_settings")
-    .select("value")
-    .eq("key", GAME_COVER_OPTIMIZATION_KEY)
-    .maybeSingle();
-  if (error) throw error;
-  const value = data?.value;
+  const { value } = await getAdminSetting(GAME_COVER_OPTIMIZATION_KEY);
   return value && typeof value === "object" && Array.isArray(value.attemptedGameIds)
     ? value
     : { version: 1, attemptedGameIds: [], optimized: 0, skipped: 0, failed: 0 };
@@ -96,10 +94,7 @@ async function optimizeExistingGameCover(url) {
 const PDF_CARD_IMAGE_OPTIMIZATION_KEY = "pdf_game_card_image_optimization_v1";
 
 async function loadPdfCardImageOptimizationState() {
-  const { data, error } = await supabase.from("app_settings").select("value")
-    .eq("key", PDF_CARD_IMAGE_OPTIMIZATION_KEY).maybeSingle();
-  if (error) throw error;
-  const value = data?.value;
+  const { value } = await getAdminSetting(PDF_CARD_IMAGE_OPTIMIZATION_KEY);
   return value && typeof value === "object" && Array.isArray(value.attemptedCardIds)
     ? value
     : { version: 1, attemptedCardIds: [], optimized: 0, skipped: 0, failed: 0 };
