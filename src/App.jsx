@@ -33,6 +33,8 @@ import {
 import { getFunctions, httpsCallable } from "firebase/functions";
 import { ref as firebaseStorageRef, getDownloadURL } from "firebase/storage";
 import { firebaseApp, firebaseAuth, firebaseStorage, firestore } from "./lib/firebase";
+const COVER_BUCKET = "covers";
+const PDF_BUCKET = "pdfs";
 import { collection, doc, getDocs, query, where, orderBy, setDoc, updateDoc, serverTimestamp } from "firebase/firestore";
 import { signInWithEmailAndPassword, signOut as firebaseSignOut, getIdTokenResult, sendPasswordResetEmail, onAuthStateChanged } from "firebase/auth";
 import heartshapersLogo from "./assets/heartshapers-logo.svg?no-inline";
@@ -174,7 +176,7 @@ const DEFAULT_CATEGORY_OPTIONS = {
   Work: ["Leadership"],
   Ministry: ["Heroes of Faith", "Group Dynamics"]
 };
-const PAYMENT_PROOF_BUCKET = "payment-proofs";
+
 const DEFAULT_PAYMENT_SETTINGS = {
   payment_method: "gcash",
   qr_image_url: "",
