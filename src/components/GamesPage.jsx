@@ -23,6 +23,8 @@ import { getLegacyGameRuleBlocks, parseInlineFormatting } from "../lib/legacyGam
 import { gameUploadSizeError, loadGameUploadLimit } from "../lib/uploadSettings";
 import { listFirebaseGamesWithCounts, loadFirebaseGameDetails, loadFirebaseGameAccess, updateFirebaseGameAccess, softDeleteFirebaseGame, updateFirebaseGameWithCover } from "../lib/firebaseGames";
 import { createFirebasePdfGame, downloadFirebasePdfGameSource, updateFirebasePdfGame } from "../lib/firebaseGamePublishing";
+import { uploadFirebaseAsset } from "../lib/firebaseAssetStorage";
+import { updateFirebaseGameCover } from "../lib/firebaseGames";
 import { supabase } from "../lib/supabase";
 
 const CARD_PAGE_SIZE = 20;
@@ -908,21 +910,8 @@ export default function GamesPage({ canManageGames, ConfirmModal, showToast }) {
             outcome = "skipped";
           } else {
             uploadedPath = `games/${game.id}/cover/optimized-${Date.now()}.webp`;
-            const { error: uploadError } = await supabase.storage.from("game-assets").upload(uploadedPath, blob, {
-              contentType: "image/webp",
-              cacheControl: "31536000",
-              upsert: false
-            });
-            if (uploadError) throw uploadError;
-            const { data, error: updateError } = await supabase
-              .from("games")
-              .update({ cover_image_url: uploadedPath })
-              .eq("id", game.id)
-              .eq("cover_image_url", game.cover_image_url)
-              .select("id")
-              .maybeSingle();
-            if (updateError) throw updateError;
-            if (!data) throw new Error("The game cover changed during optimization; the original was retained.");
+            await uploadFirebaseAsset(uploadedPath, blob, "image/webp");
+            await updateFirebaseGameCover(game.id, game.cover_image_url, uploadedPath);
             optimizedCount += 1;
             outcome = "optimized";
           }
