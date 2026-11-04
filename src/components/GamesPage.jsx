@@ -19,13 +19,7 @@ import {
 import { logAdminAction } from "../lib/adminAudit";
 import { getGameUserAccess, updateGameUserAccess } from "../lib/adminUsers";
 import { getLegacyGameRuleBlocks, parseInlineFormatting } from "../lib/legacyGameRuleBlocks";
-import {
-  createPdfGame,
-  downloadPdfGameSource,
 
-  updateGameWithCover,
-  updatePdfGame
-} from "../lib/games";
 import { gameUploadSizeError, loadGameUploadLimit } from "../lib/uploadSettings";
 import { listFirebaseGamesWithCounts, loadFirebaseGameDetails, loadFirebaseGameAccess, updateFirebaseGameAccess, softDeleteFirebaseGame, updateFirebaseGameWithCover } from "../lib/firebaseGames";
 import { createFirebasePdfGame, downloadFirebasePdfGameSource, updateFirebasePdfGame } from "../lib/firebaseGamePublishing";
