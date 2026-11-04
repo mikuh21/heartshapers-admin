@@ -3106,17 +3106,16 @@ function PaymentsPage({ canManagePayments }) {
 
       let notificationFailed = false;
       if (action === "verify") {
-        const { error: emailError } = await supabase.functions.invoke("send-payment-verification-email", {
-          body: {
+        try {
+          const sendPaymentVerificationEmail = httpsCallable(getFunctions(firebaseApp, "asia-southeast1"), "sendPaymentVerificationEmail");
+          await sendPaymentVerificationEmail({
             user_id: selected.user_id,
-            reference_number: selected.reference_number,
-            proof_image_url: selected.proof_image_url
-          }
-        });
-        if (emailError) {
+            reference_number: selected.reference_number
+          });
+        } catch (emailError) {
           notificationFailed = true;
           console.error("Payment was verified, but the admin email notification failed.", {
-            code: emailError.name || "PAYMENT_EMAIL_FAILED"
+            code: emailError.code || "PAYMENT_EMAIL_FAILED"
           });
         }
       }
