@@ -1,6 +1,13 @@
 const { onCall, HttpsError } = require("firebase-functions/v2/https");
 const { initializeApp } = require("firebase-admin/app");
 const { getFirestore, FieldValue } = require("firebase-admin/firestore");
+const { defineSecret } = require("firebase-functions/params");
+const { getAuth } = require("firebase-admin/auth");
+const SMTP_HOST = defineSecret("SMTP_HOST");
+const SMTP_PORT = defineSecret("SMTP_PORT");
+const SMTP_USER = defineSecret("SMTP_USER");
+const SMTP_PASSWORD = defineSecret("SMTP_PASSWORD");
+const SMTP_FROM = defineSecret("SMTP_FROM");
 
 initializeApp();
 const db = getFirestore();
@@ -88,6 +95,45 @@ exports.reviewCartPayment = onCall({ region: "asia-southeast1" }, async (request
     });
     return { status: action === "verify" ? "verified" : "rejected", items_reviewed: pending.length };
   });
+});
+
+
+exports.sendPaymentVerificationEmail = onCall({
+  region: "asia-southeast1",
+  secrets: [SMTP_HOST, SMTP_PORT, SMTP_USER, SMTP_PASSWORD, SMTP_FROM]
+}, async (request) => {
+  requireAdmin(request);
+  const { user_id, reference_number } = request.data || {};
+  if (!user_id || !reference_number) {
+    throw new HttpsError("invalid-argument", "A user ID and payment reference number are required.");
+  }
+
+  let user;
+  try {
+    user = await getAuth().getUser(String(user_id));
+  } catch (error) {
+    if (error?.code === "auth/user-not-found") {
+      throw new HttpsError("not-found", "The customer account could not be found.");
+    }
+    throw new HttpsError("internal", "Unable to retrieve the customer account.");
+  }
+  if (!user.email) throw new HttpsError("failed-precondition", "The customer account has no email address.");
+
+  const nodemailer = require("nodemailer");
+  const port = Number(SMTP_PORT.value() || 587);
+  const transport = nodemailer.createTransport({
+    host: SMTP_HOST.value(),
+    port,
+    secure: port === 465,
+    auth: { user: SMTP_USER.value(), pass: SMTP_PASSWORD.value() }
+  });
+  await transport.sendMail({
+    from: SMTP_FROM.value(),
+    to: user.email,
+    subject: "HEARTSHAPERS payment verified",
+    text: `Hello ${user.displayName || "there"},\n\nYour payment has been verified successfully. Access to your purchased HEARTSHAPERS content has been granted.\n\nPayment reference: ${String(reference_number)}\n\nThank you for supporting HEARTSHAPERS.`
+  });
+  return { sent: true };
 });
 
 // Firebase Auth user and administrator management callables.
