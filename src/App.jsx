@@ -34,7 +34,7 @@ import { getFunctions, httpsCallable } from "firebase/functions";
 import { ref as firebaseStorageRef, getDownloadURL } from "firebase/storage";
 import { firebaseApp, firebaseAuth, firebaseStorage, firestore } from "./lib/firebase";
 import { collection, doc, getDocs, query, where, orderBy, setDoc, updateDoc, serverTimestamp } from "firebase/firestore";
-import { signInWithEmailAndPassword, signOut as firebaseSignOut, getIdTokenResult, sendPasswordResetEmail } from "firebase/auth";
+import { signInWithEmailAndPassword, signOut as firebaseSignOut, getIdTokenResult, sendPasswordResetEmail, onAuthStateChanged } from "firebase/auth";
 import heartshapersLogo from "./assets/heartshapers-logo.svg?no-inline";
 import {
   DEFAULT_UPLOAD_SETTINGS,
@@ -520,16 +520,32 @@ function App() {
   const [loadingAuth, setLoadingAuth] = useState(true);
 
   useEffect(() => {
-    supabase.auth.getSession().then(({ data }) => {
-      setSession(data.session);
-      setLoadingAuth(false);
+    let active = true;
+    const unsubscribe = onAuthStateChanged(firebaseAuth, async (user) => {
+      if (!active) return;
+      if (!user) {
+        setSession(null);
+        setLoadingAuth(false);
+        return;
+      }
+      try {
+        const tokenResult = await getIdTokenResult(user);
+        if (!active) return;
+        const claims = tokenResult.claims || {};
+        setSession({ user: {
+          ...user,
+          id: user.uid,
+          app_metadata: { role: claims.role, roles: claims.roles, access_level: claims.access_level },
+          user_metadata: { full_name: user.displayName || "", email_verified: user.emailVerified }
+        } });
+      } catch (error) {
+        console.error("Unable to read Firebase admin claims.", { code: error?.code || "UNKNOWN" });
+        if (active) setSession(null);
+      } finally {
+        if (active) setLoadingAuth(false);
+      }
     });
-
-    const { data: listener } = supabase.auth.onAuthStateChange((_event, next) => {
-      setSession(next);
-    });
-
-    return () => listener.subscription.unsubscribe();
+    return () => { active = false; unsubscribe(); };
   }, []);
 
   if (loadingAuth) return <LoadingScreen />;
@@ -598,72 +614,38 @@ function Login() {
     setBusy(true);
     setError("");
 
-    const { data, error } = await supabase.auth.signInWithPassword({
-      email: email.trim(),
-      password
-    });
-
-    if (error) {
-      setError(error.message);
-      setBusy(false);
-      return;
-    }
-
-    const role = getAuthRole(data.user);
-    if (!isAdminWebUser(data.user)) {
-      try {
-        await supabase.functions.invoke(
-          import.meta.env.VITE_ADMIN_USER_FUNCTION || "admin-user-management",
-          { body: { action: "admin_login_access_denied" } }
-        );
-      } catch (auditError) {
-        console.error("Admin access-denied audit request failed.", {
-          code: auditError.code || "AUDIT_REQUEST_FAILED"
-        });
-      }
-      await supabase.auth.signOut();
-      setError("This account does not have permission to access Heartshapers Admin.");
-      setBusy(false);
-      return;
-    }
-
-    // Establish Firebase Auth as the identity used by Firebase-backed admin actions.
-    // Supabase remains active during the staged migration for legacy admin modules.
-    let firebaseCredential;
     try {
-      firebaseCredential = await signInWithEmailAndPassword(firebaseAuth, email.trim(), password);
-      const tokenResult = await getIdTokenResult(firebaseCredential.user, true);
-      const firebaseRoles = [tokenResult.claims.role, tokenResult.claims.roles]
+      const credential = await signInWithEmailAndPassword(firebaseAuth, email.trim(), password);
+      const tokenResult = await getIdTokenResult(credential.user, true);
+      const claims = tokenResult.claims || {};
+      const roles = [claims.role, claims.roles, claims.access_level]
         .flatMap((value) => Array.isArray(value) ? value : [value])
-        .map((value) => String(value || "").trim().toLowerCase());
-      if (!firebaseRoles.some((value) => ["admin", "super_admin"].includes(value))) {
+        .map((value) => String(value || "").trim().toLowerCase())
+        .filter(Boolean);
+      if (!roles.some((value) => ["admin", "super_admin"].includes(value))) {
         await firebaseSignOut(firebaseAuth);
-        await supabase.auth.signOut();
-        setError("Your Firebase account is not provisioned with the admin role yet. Ask the project administrator to assign the admin custom claim.");
+        setError("This account does not have permission to access Heartshapers Admin. Ask the project administrator to assign the admin custom claim.");
         setBusy(false);
         return;
       }
+
+      await logAdminAction({
+        action: "admin_login",
+        targetType: "admin_account",
+        targetId: credential.user.uid,
+        targetName: credential.user.email || null,
+        details: { role: roles.find((value) => ["admin", "super_admin"].includes(value)) }
+      });
     } catch (firebaseError) {
-      await supabase.auth.signOut();
       setError(firebaseError?.code === "auth/user-not-found"
         ? "This administrator account has not been migrated to Firebase Authentication yet."
         : firebaseError?.code === "auth/wrong-password" || firebaseError?.code === "auth/invalid-credential"
-          ? "The Firebase admin credentials could not be verified. Ensure the account is migrated and its password matches."
+          ? "The Firebase admin credentials could not be verified. Check the account email and password."
           : firebaseError?.message || "Firebase admin authentication failed.");
+    } finally {
       setBusy(false);
-      return;
     }
-
-    await logAdminAction({
-      action: "admin_login",
-      targetType: "admin_account",
-      targetId: data.user.id,
-      targetName: data.user.email || null,
-      details: { role: getAuthRole(data.user), firebase_uid: firebaseCredential.user.uid }
-    });
-    setBusy(false);
   }
-
   return (
     <div className="login-page">
       <div className="login-card">
@@ -727,7 +709,6 @@ function AdminAccessDenied() {
         <button
           className="primary-btn full"
           onClick={async () => {
-            await supabase.auth.signOut();
             await firebaseSignOut(firebaseAuth).catch(() => {});
             window.location.reload();
           }}
@@ -804,20 +785,14 @@ function AdminApp({ session }) {
   const { showToast } = useToast();
 
   async function logout() {
-    const { data: sessionData } = await supabase.auth.getSession();
-    const result = await supabase.auth.signOut();
-    await firebaseSignOut(firebaseAuth).catch((error) => {
-      console.error("Firebase admin logout failed.", { code: error?.code || "UNKNOWN" });
+    await logAdminAction({
+      action: "admin_logout",
+      targetType: "admin_account",
+      targetId: session.user.uid || session.user.id,
+      targetName: session.user.email || null
     });
-    if (!result.error && sessionData.session?.access_token) {
-      await logAdminAction({
-        action: "admin_logout",
-        targetType: "admin_account",
-        targetId: session.user.id,
-        targetName: session.user.email || null
-      }, sessionData.session.access_token);
-    }
-    return result;
+    await firebaseSignOut(firebaseAuth);
+    return { error: null };
   }
 
   return (
