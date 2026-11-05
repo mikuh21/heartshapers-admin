@@ -1,0 +1,106 @@
+rules_version = '2';
+service firebase.storage {
+  match /b/{bucket}/o {
+    function signedIn() {
+      return request.auth != null;
+    }
+
+    function hasAdminRole() {
+      return signedIn()
+        && (
+          request.auth.token.get('role', '') in ['admin', 'super_admin']
+          || (
+            request.auth.token.get('roles', []) is list
+            && request.auth.token.get('roles', []).hasAny(['admin', 'super_admin'])
+          )
+        );
+    }
+
+    function validImageUpload() {
+      return request.resource != null
+        && request.resource.size < 12 * 1024 * 1024
+        && request.resource.contentType.matches('image/(jpeg|png|webp)');
+    }
+
+    function validPdfUpload() {
+      return request.resource != null
+        && request.resource.size < 25 * 1024 * 1024
+        && request.resource.contentType == 'application/pdf';
+    }
+
+    // Catalog cover images may be fetched publicly for catalog display.
+    // Admin claim required for upload/replace/delete/list.
+    match /covers/{assetPath=**} {
+      allow get: if true;
+      allow list: if hasAdminRole();
+      allow create, update: if hasAdminRole() && validImageUpload();
+      allow delete: if hasAdminRole();
+    }
+
+    // Private book PDFs: customer reading should use a trusted entitlement
+    // check to issue a short-lived download URL; admin UI can access directly.
+    match /pdfs/{assetPath=**} {
+      allow read: if hasAdminRole();
+      allow create, update: if hasAdminRole() && validPdfUpload();
+      allow delete: if hasAdminRole();
+    }
+
+    // Game covers and optimized game-card images can be displayed to signed-in
+    // customers. Only admins may manage their contents.
+    match /games/{gameId}/cover/{assetPath=**} {
+      allow get: if signedIn();
+      allow list: if hasAdminRole();
+      allow create, update: if hasAdminRole() && validImageUpload();
+      allow delete: if hasAdminRole();
+    }
+
+    match /games/{gameId}/cards/{assetPath=**} {
+      allow get: if hasAdminRole();
+      allow list: if hasAdminRole();
+      allow create, update: if hasAdminRole() && validImageUpload();
+      allow delete: if hasAdminRole();
+    }
+
+    // QR images are customer-visible after sign-in. Admins manage assets.
+    match /settings/{assetPath=**} {
+      allow get: if signedIn();
+      allow list: if hasAdminRole();
+      allow create, update: if hasAdminRole() && validImageUpload();
+      allow delete: if hasAdminRole();
+    }
+
+    match /payment-qr/{assetPath=**} {
+      allow get: if signedIn();
+      allow list: if hasAdminRole();
+      allow create, update: if hasAdminRole() && validImageUpload();
+      allow delete: if hasAdminRole();
+    }
+
+    // Payment proofs are private. Customer uploads/deletes should be mediated
+    // by callable functions that validate user UID and pending payment context.
+    match /payment-proofs/{userId}/payments/{paymentId}/{fileName} {
+      allow read: if hasAdminRole();
+      allow create: if signedIn()
+        && request.auth.uid == userId
+        && request.resource.size < 12 * 1024 * 1024
+        && request.resource.contentType.matches('image/(jpeg|png|webp)');
+      allow update, delete: if false;
+    }
+
+    // Avatar files are publicly displayable; writes are restricted to the
+    // authenticated owner, with image type and size validation.
+    match /profile-avatars/{userId}/{assetPath=**} {
+      allow get: if true;
+      allow list: if hasAdminRole();
+      allow create, update: if signedIn()
+        && request.auth.uid == userId
+        && validImageUpload()
+        && request.resource.size < 5 * 1024 * 1024;
+      allow delete: if signedIn() && request.auth.uid == userId;
+    }
+
+    match /{assetPath=**} {
+      allow read, write: if false;
+    }
+  }
+}

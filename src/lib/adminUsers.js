@@ -1,9 +1,19 @@
-import { supabase } from "./supabase";
+import { getFunctions, httpsCallable } from "firebase/functions";
+import { firebaseApp } from "./firebase";
 
-const ADMIN_USERS_FUNCTION =
-  import.meta.env.VITE_ADMIN_USER_FUNCTION || "admin-user-management";
-const ADMIN_MANAGEMENT_FUNCTION =
-  import.meta.env.VITE_ADMIN_MANAGEMENT_FUNCTION || "admin-management";
+const firebaseFunctions = getFunctions(firebaseApp, "asia-southeast1");
+async function callUserManagement(name, payload = {}) {
+  try {
+    const result = await httpsCallable(firebaseFunctions, name)(payload);
+    return result.data || {};
+  } catch (error) {
+    const code = String(error?.code || "").split("/").pop();
+    if (code === "already-exists") throw new Error("An account with this email already exists.");
+    if (code === "permission-denied") throw new Error("You do not have permission to perform this action.");
+    if (code === "unauthenticated") throw new Error("Your administrator session has expired. Sign in again.");
+    throw new Error(String(error?.message || "User management is unavailable right now."));
+  }
+}
 
 export const ADMIN_WEB_ALLOWED_ROLES = ["admin", "super_admin"];
 export const NORMAL_MOBILE_ROLE = "user";
@@ -34,12 +44,12 @@ export function getAuthRole(user) {
     user.role
   ];
 
-  for (const value of sources) {
-    const normalized = extractRoleValue(value);
-    if (normalized) return normalized;
-  }
-
-  return null;
+  const normalizedRoles = sources
+    .flatMap((value) => Array.isArray(value) ? value : [value])
+    .map((value) => String(value || "").trim().toLowerCase())
+    .filter(Boolean);
+  if (normalizedRoles.includes("super_admin")) return "super_admin";
+  return normalizedRoles.find(Boolean) || null;
 }
 
 function normalizeUser(rawUser = {}) {
@@ -98,45 +108,13 @@ export function isAdminUser(user) {
 }
 
 export async function listUsers() {
-  const { data, error } = await supabase.functions.invoke(ADMIN_USERS_FUNCTION, {
-    body: { action: "list" }
-  });
-
-  if (error) {
-    throw new Error("User management is unavailable right now.");
-  }
-
-  const users = Array.isArray(data?.users) ? data.users : [];
-  return users.map(normalizeUser);
+  const data = await callUserManagement("listManagedUsers");
+  return (Array.isArray(data.users) ? data.users : []).map(normalizeUser);
 }
 
+
 export async function getBookUserAccess(bookId) {
-  const { data, error } = await supabase.functions.invoke(ADMIN_USERS_FUNCTION, {
-    body: { action: "book-access", bookId }
-  });
-
-  if (error) {
-    const response = error.context;
-    let backendError = null;
-    if (response && typeof response.clone === "function") {
-      backendError = (await response.clone().json().catch(() => null))?.error || null;
-    }
-    console.error("User access Edge Function request failed.", {
-      status: response?.status || error.status || null,
-      code: error.code || error.name || "FUNCTION_REQUEST_FAILED",
-      message: backendError || error.message || "Unknown function error"
-    });
-    throw new Error("Unable to load user access information.");
-  }
-
-  if (data?.error) {
-    console.error("User access Edge Function returned an error.", {
-      code: data.code || "BOOK_ACCESS_FAILED",
-      message: data.error
-    });
-    throw new Error("Unable to load user access information.");
-  }
-
+  const data = await callUserManagement("getManagedBookUserAccess", { bookId });
   return {
     book: data.book,
     users: (data.users || []).map(normalizeUser),
@@ -146,32 +124,12 @@ export async function getBookUserAccess(bookId) {
 }
 
 export async function updateBookUserAccess({ bookId, userId, accessStatus }) {
-  const { data, error } = await supabase.functions.invoke(ADMIN_USERS_FUNCTION, {
-    body: { action: "set-book-access", bookId, userId, accessStatus }
-  });
-
-  if (error || data?.error) {
-    throw new Error(data?.error === "Verified purchases cannot be changed here."
-      ? data.error
-      : "Unable to update user access.");
-  }
-
-  return data?.accessStatus;
+  const data = await callUserManagement("setManagedBookUserAccess", { bookId, userId, accessStatus });
+  return data.accessStatus;
 }
 
 export async function getGameUserAccess(gameId) {
-  const { data, error } = await supabase.functions.invoke(ADMIN_USERS_FUNCTION, {
-    body: { action: "game-access", gameId }
-  });
-
-  if (error || data?.error) {
-    console.error("Game user access request failed.", {
-      code: error?.code || error?.name || data?.code || "GAME_ACCESS_FAILED",
-      message: data?.error || error?.message || "Unknown function error"
-    });
-    throw new Error("Unable to load game user access information.");
-  }
-
+  const data = await callUserManagement("getManagedGameUserAccess", { gameId });
   return {
     game: data.game,
     users: (data.users || []).map(normalizeUser),
@@ -181,37 +139,13 @@ export async function getGameUserAccess(gameId) {
 }
 
 export async function updateGameUserAccess({ gameId, userId, accessStatus }) {
-  const { data, error } = await supabase.functions.invoke(ADMIN_USERS_FUNCTION, {
-    body: { action: "set-game-access", gameId, userId, accessStatus }
-  });
-
-  if (error || data?.error) {
-    console.error("Game user access update failed.", {
-      code: error?.code || error?.name || data?.code || "GAME_ACCESS_UPDATE_FAILED",
-      message: data?.error || error?.message || "Unknown function error"
-    });
-    throw new Error(data?.error === "Verified purchases cannot be changed here."
-      ? data.error
-      : "Unable to update game user access.");
-  }
-
-  return data?.accessStatus;
+  const data = await callUserManagement("setManagedGameUserAccess", { gameId, userId, accessStatus });
+  return data.accessStatus;
 }
 
 export async function updateUserStatus(userId, disabled) {
-  const { data, error } = await supabase.functions.invoke(ADMIN_USERS_FUNCTION, {
-    body: {
-      action: "update-status",
-      userId,
-      disabled
-    }
-  });
-
-  if (error) {
-    throw new Error("Unable to update this user account right now.");
-  }
-
-  return normalizeUser(data?.user || data || null);
+  const data = await callUserManagement("updateManagedUserStatus", { userId, disabled });
+  return normalizeUser(data.user || data || null);
 }
 
 function getCreateUserErrorMessage(code, status) {
@@ -234,97 +168,24 @@ function getCreateUserErrorMessage(code, status) {
 }
 
 export async function createUser({ full_name, email, password, membership_tier = "regular" }) {
-  let data;
-  let error;
-  try {
-    ({ data, error } = await supabase.functions.invoke(ADMIN_USERS_FUNCTION, {
-      body: {
-        action: "create-user",
-        full_name,
-        email,
-        password,
-        membership_tier
-      }
-    }));
-  } catch {
-    throw new Error("Unable to create the user account right now. Please try again.");
-  }
-
-  if (error) {
-    let code = null;
-    try {
-      const response = error.context;
-      if (response && typeof response.json === "function") {
-        code = (await response.json())?.error || null;
-      }
-    } catch {
-      code = null;
-    }
-
-    throw new Error(getCreateUserErrorMessage(code, error.context?.status));
-  }
-
-  if (data?.error) {
-    throw new Error(getCreateUserErrorMessage(data.error));
-  }
-
-  if (!data?.user) {
-    throw new Error("Unable to create the user account right now. Please try again.");
-  }
-
+  const data = await callUserManagement("createManagedUser", { full_name, email, password, membership_tier });
+  if (!data?.user) throw new Error("Unable to create the user account right now. Please try again.");
   return normalizeUser(data.user);
 }
 
 export async function listAdmins() {
-  const { data, error } = await supabase.functions.invoke(ADMIN_MANAGEMENT_FUNCTION, {
-    body: { action: "list" }
-  });
-
-  if (error) {
-    throw new Error("Administrator management is unavailable right now.");
-  }
-
-  const admins = Array.isArray(data?.admins) ? data.admins : [];
-  return admins.map(normalizeUser);
+  const data = await callUserManagement("listManagedAdmins");
+  return (Array.isArray(data.admins) ? data.admins : []).map(normalizeUser);
 }
 
 export async function createAdmin({ full_name, email, password }) {
-  const { data, error } = await supabase.functions.invoke(ADMIN_MANAGEMENT_FUNCTION, {
-    body: {
-      action: "create",
-      full_name,
-      email,
-      password
-    }
-  });
-
-  if (error) {
-    throw new Error("Unable to create the administrator account. Please try again.");
-  }
-
-  if (data?.error) {
-    throw new Error(data.error || "Unable to create the administrator account. Please try again.");
-  }
-
-  return normalizeUser(data?.admin || data || null);
+  const data = await callUserManagement("createManagedAdmin", { full_name, email, password });
+  if (!data?.admin) throw new Error("Unable to create the administrator account. Please try again.");
+  return normalizeUser(data.admin);
 }
 
 export async function updateAdminStatus(userId, disabled) {
-  const { data, error } = await supabase.functions.invoke(ADMIN_MANAGEMENT_FUNCTION, {
-    body: {
-      action: "update-status",
-      userId,
-      disabled
-    }
-  });
-
-  if (error) {
-    throw new Error("Unable to update this administrator account right now.");
-  }
-
-  if (data?.error) {
-    throw new Error(data.error || "Unable to update this administrator account right now.");
-  }
-
-  return normalizeUser(data?.admin || data || null);
+  const data = await callUserManagement("updateManagedAdminStatus", { userId, disabled });
+  if (!data?.admin) throw new Error("Unable to update this administrator account right now.");
+  return normalizeUser(data.admin);
 }

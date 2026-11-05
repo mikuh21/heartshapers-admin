@@ -29,7 +29,14 @@ import {
   ZoomOut,
   RotateCcw
 } from "lucide-react";
-import { supabase, COVER_BUCKET, PDF_BUCKET } from "./lib/supabase";
+
+import { getFunctions, httpsCallable } from "firebase/functions";
+import { ref as firebaseStorageRef, getDownloadURL } from "firebase/storage";
+import { firebaseApp, firebaseAuth, firebaseStorage, firestore } from "./lib/firebase";
+const COVER_BUCKET = "covers";
+const PDF_BUCKET = "pdfs";
+import { collection, doc, getDocs, query, where, orderBy, setDoc, updateDoc, serverTimestamp } from "firebase/firestore";
+import { signInWithEmailAndPassword, signOut as firebaseSignOut, getIdTokenResult, sendPasswordResetEmail, onAuthStateChanged } from "firebase/auth";
 import heartshapersLogo from "./assets/heartshapers-logo.svg?no-inline";
 import {
   DEFAULT_UPLOAD_SETTINGS,
@@ -40,6 +47,9 @@ import {
 } from "./lib/uploadSettings";
 import { logAdminAction } from "./lib/adminAudit";
 import GamesPage from "./components/GamesPage";
+import { listFirebaseBooks, softDeleteFirebaseBook, updateFirebaseBookCover } from "./lib/firebaseBooks";
+import { ensureFirebaseDefaultTaxonomy, loadFirebaseManagedSettings, createFirebasePillar, renameFirebasePillar, createFirebaseCategory, renameFirebaseCategory, setFirebaseCategoryLock, softDeleteFirebaseTaxonomy } from "./lib/firebaseTaxonomy";
+import { uploadFirebaseAsset, deleteFirebaseAsset } from "./lib/firebaseAssetStorage";
 import {
   getAuthRole,
   isAdminUser,
@@ -59,36 +69,20 @@ const DEFAULT_BOOK_AUTHOR = "Compiled and Edited by HEARTSHAPERS";
 
 const COVER_OPTIMIZATION_SETTING_KEY = "cover_optimization_v1";
 
+function isOptimizedBookCoverUrl(value) {
+  const url = String(value || "").toLowerCase();
+  return url.includes("/optimized/") || url.includes("optimized%2f") || /\.webp(?:[?#]|$)/.test(url);
+}
+
 async function loadCoverOptimizationState() {
-  const { data, error } = await supabase
-    .from("app_settings")
-    .select("value")
-    .eq("key", COVER_OPTIMIZATION_SETTING_KEY)
-    .maybeSingle();
-  if (error) throw error;
-  const value = data?.value;
+  const { value } = await getAdminSetting(COVER_OPTIMIZATION_SETTING_KEY);
   return value && typeof value === "object" && Array.isArray(value.attemptedBookIds)
     ? value
     : { version: 1, attemptedBookIds: [], optimized: 0, skipped: 0, failed: 0 };
 }
 
 async function saveCoverOptimizationState(state) {
-  const { data: sessionData, error: sessionError } = await supabase.auth.getSession();
-  const userId = sessionData?.session?.user?.id;
-  if (sessionError || !userId) {
-    const authError = new Error("Your admin session has expired. Sign in again before continuing cover optimization.");
-    authError.code = "ADMIN_SESSION_EXPIRED";
-    throw authError;
-  }
-  const { error } = await supabase
-    .from("app_settings")
-    .upsert({
-      key: COVER_OPTIMIZATION_SETTING_KEY,
-      value: state,
-      updated_at: new Date().toISOString(),
-      updated_by: userId
-    }, { onConflict: "key" });
-  if (error) throw error;
+  await setAdminSetting(COVER_OPTIMIZATION_SETTING_KEY, state);
 }
 
 async function optimizeBookCover(file) {
@@ -182,7 +176,7 @@ const DEFAULT_CATEGORY_OPTIONS = {
   Work: ["Leadership"],
   Ministry: ["Heroes of Faith", "Group Dynamics"]
 };
-const PAYMENT_PROOF_BUCKET = "payment-proofs";
+
 const DEFAULT_PAYMENT_SETTINGS = {
   payment_method: "gcash",
   qr_image_url: "",
@@ -193,46 +187,19 @@ const DEFAULT_PAYMENT_SETTINGS = {
 const ToastContext = createContext(null);
 
 async function loadUploadSettings() {
-  const { data, error } = await supabase
-    .from("app_settings")
-    .select("value")
-    .eq("key", "upload_settings")
-    .maybeSingle();
-
-  if (error) throw error;
-  return normalizeUploadSettings(data?.value || DEFAULT_UPLOAD_SETTINGS);
+  const { value } = await getAdminSetting("upload_settings");
+  return normalizeUploadSettings(value || DEFAULT_UPLOAD_SETTINGS);
 }
 
-async function saveUploadSettingsToSupabase(settings) {
+async function saveUploadSettingsToFirebase(settings) {
   const normalized = normalizeUploadSettings(settings);
-  const { data: userData } = await supabase.auth.getUser();
-  const { error } = await supabase
-    .from("app_settings")
-    .upsert(
-      {
-        key: "upload_settings",
-        value: normalized,
-        updated_at: new Date().toISOString(),
-        updated_by: userData.user?.id || null
-      },
-      {
-        onConflict: "key"
-      }
-    );
-
-  if (error) throw error;
+  await setAdminSetting("upload_settings", normalized);
   return normalized;
 }
 
 async function loadPaymentSettings() {
-  const { data, error } = await supabase
-    .from("app_settings")
-    .select("value")
-    .eq("key", "payment_settings")
-    .maybeSingle();
-
-  if (error) throw error;
-  const loaded = { ...DEFAULT_PAYMENT_SETTINGS, ...(data?.value || {}) };
+  const { value } = await getAdminSetting("payment_settings");
+  const loaded = { ...DEFAULT_PAYMENT_SETTINGS, ...(value || {}) };
   const qrPaths = Array.isArray(loaded.qr_image_urls) ? loaded.qr_image_urls.filter(Boolean) : [];
   if (qrPaths.length === 0 && loaded.qr_image_url) qrPaths.push(loaded.qr_image_url);
   loaded.qr_image_urls = [...new Set(qrPaths)];
@@ -240,35 +207,14 @@ async function loadPaymentSettings() {
   return loaded;
 }
 
-async function savePaymentSettingsToSupabase(settings) {
-  const { data: userData } = await supabase.auth.getUser();
+async function savePaymentSettingsToFirebase(settings) {
   const normalized = { ...DEFAULT_PAYMENT_SETTINGS, ...settings, payment_method: "gcash" };
-  const { error } = await supabase
-    .from("app_settings")
-    .upsert(
-      {
-        key: "payment_settings",
-        value: normalized,
-        updated_at: new Date().toISOString(),
-        updated_by: userData.user?.id || null
-      },
-      {
-        onConflict: "key"
-      }
-    );
-
-  if (error) throw error;
+  await setAdminSetting("payment_settings", normalized);
   return normalized;
 }
 
 async function loadAdminLogs() {
-  const { data, error } = await supabase
-    .from("admin_logs")
-    .select("id, action, details, admin_email, created_at")
-    .order("created_at", { ascending: false });
-
-  if (error) throw error;
-  return data || [];
+  return listAdminAuditLogs();
 }
 
 function formatAdminLogAction(action = "") {
@@ -413,114 +359,24 @@ function sortCategoryNames(categoryNames = []) {
 }
 
 async function ensureDefaultManagedSettings() {
-  const { data: pillarRows, error: pillarError } = await supabase
-    .from("pillars")
-    .select("id, name");
-
-  if (pillarError) throw pillarError;
-
-  const existingPillarNames = new Map((pillarRows || []).map((pillar) => [String(pillar.name).trim().toLowerCase(), pillar]));
-  const newPillars = DEFAULT_PILLAR_OPTIONS.filter((pillar) => !existingPillarNames.has(pillar.trim().toLowerCase()));
-
-  if (newPillars.length > 0) {
-    const { error: insertPillarError } = await supabase
-      .from("pillars")
-      .insert(newPillars.map((name) => ({ name })));
-
-    if (insertPillarError) throw insertPillarError;
-  }
-
-  const { data: allPillars, error: allPillarError } = await supabase
-    .from("pillars")
-    .select("id, name");
-
-  if (allPillarError) throw allPillarError;
-
-  const pillarByName = new Map((allPillars || []).map((pillar) => [String(pillar.name).trim().toLowerCase(), pillar]));
-  const { data: categoryRows, error: categoryError } = await supabase
-    .from("categories")
-    .select("id, pillar_id, name");
-
-  if (categoryError) throw categoryError;
-
-  const existingCategoryKeys = new Set((categoryRows || []).map((category) => {
-    const pillarName = (allPillars || []).find((pillar) => pillar.id === category.pillar_id)?.name || "";
-    return `${pillarName.trim().toLowerCase()}::${String(category.name).trim().toLowerCase()}`;
-  }));
-
-  const inserts = [];
-
-  for (const [pillarName, categoryNames] of Object.entries(DEFAULT_CATEGORY_OPTIONS)) {
-    const pillar = pillarByName.get(pillarName.trim().toLowerCase());
-    if (!pillar) continue;
-
-    for (const categoryName of categoryNames) {
-      const key = `${pillarName.trim().toLowerCase()}::${categoryName.trim().toLowerCase()}`;
-      if (!existingCategoryKeys.has(key)) {
-        inserts.push({ pillar_id: pillar.id, name: categoryName });
-      }
-    }
-  }
-
-  if (inserts.length > 0) {
-    const { error: insertCategoryError } = await supabase
-      .from("categories")
-      .insert(inserts);
-
-    if (insertCategoryError) throw insertCategoryError;
-  }
+  await ensureFirebaseDefaultTaxonomy(DEFAULT_PILLAR_OPTIONS, DEFAULT_CATEGORY_OPTIONS);
 }
 
 async function loadManagedSettings() {
-  const { data: pillarRows, error: pillarError } = await supabase
-    .from("pillars")
-    .select("id, name, created_at")
-    .is("deleted_at", null)
-    .order("created_at", { ascending: true });
-
-  if (pillarError) throw pillarError;
-
-  const { data: categoryRows, error: categoryError } = await supabase
-    .from("categories")
-    .select("id, pillar_id, name, created_at, is_locked")
-    .is("deleted_at", null)
-    .order("created_at", { ascending: true });
-
-  if (categoryError) throw categoryError;
-
-  const pillarMap = new Map((pillarRows || []).map((pillar) => [pillar.id, { ...pillar, name: String(pillar.name || "").trim(), categories: [] }]));
-  for (const category of categoryRows || []) {
-    const pillar = pillarMap.get(category.pillar_id);
-    if (!pillar) continue;
-    pillar.categories.push({ ...category, name: String(category.name || "").trim() });
-  }
-
-  return (pillarRows || [])
-    .map((pillar) => {
-      const entry = pillarMap.get(pillar.id);
-      if (!entry) return null;
-      const categoryNames = sortCategoryNames(entry.categories.map((category) => category.name).filter(Boolean));
-      return {
-        id: entry.id,
-        name: entry.name,
-        created_at: entry.created_at,
-        categories: categoryNames.map((categoryName) => ({
-          id: (entry.categories.find((category) => category.name === categoryName) || {}).id,
-          name: categoryName,
-          pillar_id: entry.id,
-          is_locked: Boolean((entry.categories.find((category) => category.name === categoryName) || {}).is_locked)
-        }))
-      };
-    })
-    .filter(Boolean)
-    .sort((left, right) => {
-      const leftOrder = DEFAULT_PILLAR_OPTIONS.indexOf(left.name);
-      const rightOrder = DEFAULT_PILLAR_OPTIONS.indexOf(right.name);
-      if (leftOrder !== -1 && rightOrder !== -1) return leftOrder - rightOrder;
-      if (leftOrder !== -1) return -1;
-      if (rightOrder !== -1) return 1;
-      return left.name.localeCompare(right.name);
-    });
+  const rows = await loadFirebaseManagedSettings();
+  return rows.map((pillar) => ({
+    ...pillar,
+    categories: sortCategoryNames(pillar.categories.map((category) => category.name).filter(Boolean)).map((name) =>
+      pillar.categories.find((category) => category.name === name)
+    )
+  })).sort((left, right) => {
+    const leftOrder = DEFAULT_PILLAR_OPTIONS.indexOf(left.name);
+    const rightOrder = DEFAULT_PILLAR_OPTIONS.indexOf(right.name);
+    if (leftOrder !== -1 && rightOrder !== -1) return leftOrder - rightOrder;
+    if (leftOrder !== -1) return -1;
+    if (rightOrder !== -1) return 1;
+    return left.name.localeCompare(right.name);
+  });
 }
 
 function normalizeFilterValue(value) {
@@ -666,16 +522,32 @@ function App() {
   const [loadingAuth, setLoadingAuth] = useState(true);
 
   useEffect(() => {
-    supabase.auth.getSession().then(({ data }) => {
-      setSession(data.session);
-      setLoadingAuth(false);
+    let active = true;
+    const unsubscribe = onAuthStateChanged(firebaseAuth, async (user) => {
+      if (!active) return;
+      if (!user) {
+        setSession(null);
+        setLoadingAuth(false);
+        return;
+      }
+      try {
+        const tokenResult = await getIdTokenResult(user);
+        if (!active) return;
+        const claims = tokenResult.claims || {};
+        setSession({ user: {
+          ...user,
+          id: user.uid,
+          app_metadata: { role: claims.role, roles: claims.roles, access_level: claims.access_level },
+          user_metadata: { full_name: user.displayName || "", email_verified: user.emailVerified }
+        } });
+      } catch (error) {
+        console.error("Unable to read Firebase admin claims.", { code: error?.code || "UNKNOWN" });
+        if (active) setSession(null);
+      } finally {
+        if (active) setLoadingAuth(false);
+      }
     });
-
-    const { data: listener } = supabase.auth.onAuthStateChange((_event, next) => {
-      setSession(next);
-    });
-
-    return () => listener.subscription.unsubscribe();
+    return () => { active = false; unsubscribe(); };
   }, []);
 
   if (loadingAuth) return <LoadingScreen />;
@@ -744,45 +616,38 @@ function Login() {
     setBusy(true);
     setError("");
 
-    const { data, error } = await supabase.auth.signInWithPassword({
-      email: email.trim(),
-      password
-    });
-
-    if (error) {
-      setError(error.message);
-      setBusy(false);
-      return;
-    }
-
-    const role = getAuthRole(data.user);
-    if (!isAdminWebUser(data.user)) {
-      try {
-        await supabase.functions.invoke(
-          import.meta.env.VITE_ADMIN_USER_FUNCTION || "admin-user-management",
-          { body: { action: "admin_login_access_denied" } }
-        );
-      } catch (auditError) {
-        console.error("Admin access-denied audit request failed.", {
-          code: auditError.code || "AUDIT_REQUEST_FAILED"
-        });
+    try {
+      const credential = await signInWithEmailAndPassword(firebaseAuth, email.trim(), password);
+      const tokenResult = await getIdTokenResult(credential.user, true);
+      const claims = tokenResult.claims || {};
+      const roles = [claims.role, claims.roles, claims.access_level]
+        .flatMap((value) => Array.isArray(value) ? value : [value])
+        .map((value) => String(value || "").trim().toLowerCase())
+        .filter(Boolean);
+      if (!roles.some((value) => ["admin", "super_admin"].includes(value))) {
+        await firebaseSignOut(firebaseAuth);
+        setError("This account does not have permission to access Heartshapers Admin. Ask the project administrator to assign the admin custom claim.");
+        setBusy(false);
+        return;
       }
-      await supabase.auth.signOut();
-      setError("This account does not have permission to access Heartshapers Admin.");
+
+      await logAdminAction({
+        action: "admin_login",
+        targetType: "admin_account",
+        targetId: credential.user.uid,
+        targetName: credential.user.email || null,
+        details: { role: roles.find((value) => ["admin", "super_admin"].includes(value)) }
+      });
+    } catch (firebaseError) {
+      setError(firebaseError?.code === "auth/user-not-found"
+        ? "This administrator account has not been migrated to Firebase Authentication yet."
+        : firebaseError?.code === "auth/wrong-password" || firebaseError?.code === "auth/invalid-credential"
+          ? "The Firebase admin credentials could not be verified. Check the account email and password."
+          : firebaseError?.message || "Firebase admin authentication failed.");
+    } finally {
       setBusy(false);
-      return;
     }
-
-    await logAdminAction({
-      action: "admin_login",
-      targetType: "admin_account",
-      targetId: data.user.id,
-      targetName: data.user.email || null,
-      details: { role: getAuthRole(data.user) }
-    });
-    setBusy(false);
   }
-
   return (
     <div className="login-page">
       <div className="login-card">
@@ -846,7 +711,7 @@ function AdminAccessDenied() {
         <button
           className="primary-btn full"
           onClick={async () => {
-            await supabase.auth.signOut();
+            await firebaseSignOut(firebaseAuth).catch(() => {});
             window.location.reload();
           }}
         >
@@ -922,17 +787,14 @@ function AdminApp({ session }) {
   const { showToast } = useToast();
 
   async function logout() {
-    const { data: sessionData } = await supabase.auth.getSession();
-    const result = await supabase.auth.signOut();
-    if (!result.error && sessionData.session?.access_token) {
-      await logAdminAction({
-        action: "admin_logout",
-        targetType: "admin_account",
-        targetId: session.user.id,
-        targetName: session.user.email || null
-      }, sessionData.session.access_token);
-    }
-    return result;
+    await logAdminAction({
+      action: "admin_logout",
+      targetType: "admin_account",
+      targetId: session.user.uid || session.user.id,
+      targetName: session.user.email || null
+    });
+    await firebaseSignOut(firebaseAuth);
+    return { error: null };
   }
 
   return (
@@ -1096,22 +958,25 @@ function Dashboard({ goBooks }) {
 
   async function loadStats() {
     setLoading(true);
-    const [
-      { data, error },
-      { count: gamesCount, error: gamesError }
-    ] = await Promise.all([
-      supabase.from("books").select("id, pillar, is_locked").is("deleted_at", null),
-      supabase.from("games").select("id", { count: "exact", head: true }).is("deleted_at", null)
-    ]);
-
-    if (!error) {
-      const rows = data || [];
+    try {
+      const [bookSnapshot, gameSnapshot] = await Promise.all([
+        getDocs(collection(firestore, "books")),
+        getDocs(collection(firestore, "games"))
+      ]);
+      const rows = bookSnapshot.docs
+        .map((doc) => ({ id: doc.id, ...doc.data() }))
+        .filter((book) => !book.deleted_at);
+      const gamesCount = gameSnapshot.docs
+        .map((doc) => ({ id: doc.id, ...doc.data() }))
+        .filter((game) => !game.deleted_at).length;
       setStats({
         total: rows.length,
-        totalGames: gamesError ? 0 : gamesCount || 0,
-        locked: rows.filter((b) => b.is_locked).length,
-        free: rows.filter((b) => !b.is_locked).length
+        totalGames: gamesCount,
+        locked: rows.filter((book) => Boolean(book.is_locked)).length,
+        free: rows.filter((book) => !book.is_locked).length
       });
+    } catch (error) {
+      console.error("Unable to load Firebase dashboard stats.", { code: error?.code || "FIRESTORE_READ_FAILED" });
     }
     setLoading(false);
   }
@@ -1178,14 +1043,12 @@ function Books() {
     setLoading(true);
     setError("");
 
-    const { data, error } = await supabase
-      .from("books")
-      .select("id,title,author,cover_image_url,pdf_url,pillar,subcategory,description,keywords,created_at,is_locked,price")
-      .is("deleted_at", null)
-      .order("created_at", { ascending: false });
-
-    if (error) setError(error.message);
-    else setBooks(data || []);
+    try {
+      const data = await listFirebaseBooks();
+      setBooks(data || []);
+    } catch (loadError) {
+      setError(loadError?.message || "Unable to load books from Firebase.");
+    }
     setLoading(false);
   }
 
@@ -1226,8 +1089,7 @@ function Books() {
   });
 
   async function optimizeExistingCovers() {
-    const { data: authData, error: authError } = await supabase.auth.getUser();
-    if (authError || !authData?.user) {
+    if (!firebaseAuth.currentUser) {
       showToast("Your admin session has expired. Sign in again before optimizing book covers.", "error");
       return false;
     }
@@ -1275,14 +1137,13 @@ function Books() {
     const candidates = books.filter((book) => {
       const url = book.cover_image_url || "";
       return url
-        && !url.includes("/optimized/")
-        && !url.toLowerCase().endsWith(".webp")
+        && !isOptimizedBookCoverUrl(url)
         && !attemptedBookIds.has(book.id);
     });
     if (!candidates.length) {
       const optimizedBooks = books.filter((book) => {
         const url = String(book.cover_image_url || "").toLowerCase();
-        return url.includes("/optimized/") || url.endsWith(".webp");
+        return isOptimizedBookCoverUrl(url);
       });
       if (optimizedBooks.length === books.length && books.length > 0) {
         const reconciledState = {
@@ -1331,33 +1192,18 @@ function Books() {
             outcome = "skipped";
           } else {
             uploadedPath = `covers/optimized/${book.id}-${Date.now()}.webp`;
-            const { error: uploadError } = await supabase.storage.from(COVER_BUCKET).upload(uploadedPath, result.blob, {
-              contentType: "image/webp",
-              cacheControl: "31536000",
-              upsert: false
-            });
-            if (uploadError) throw uploadError;
+            const uploaded = await uploadFirebaseAsset(uploadedPath, result.blob, "image/webp");
+            const optimizedUrl = uploaded.downloadUrl;
+            if (!optimizedUrl) throw new Error("Firebase did not return the optimized cover URL.");
 
-            const { data: publicUrlData } = supabase.storage.from(COVER_BUCKET).getPublicUrl(uploadedPath);
-            const optimizedUrl = publicUrlData?.publicUrl;
-            if (!optimizedUrl) throw new Error("Supabase did not return the optimized cover URL.");
-
-            const { data: updatedBook, error: updateError } = await supabase
-              .from("books")
-              .update({ cover_image_url: optimizedUrl })
-              .eq("id", book.id)
-              .eq("cover_image_url", book.cover_image_url)
-              .select("id")
-              .maybeSingle();
-            if (updateError) throw updateError;
-            if (!updatedBook) throw new Error("Book cover changed during optimization; the original URL was retained.");
+            await updateFirebaseBookCover(book.id, book.cover_image_url, optimizedUrl);
 
             optimizedCount += 1;
             outcome = "optimized";
           }
         } catch (error) {
           if (uploadedPath) {
-            try { await supabase.storage.from(COVER_BUCKET).remove([uploadedPath]); } catch {}
+            try { await deleteFirebaseAsset(uploadedPath); } catch {}
           }
           failures.push(`${book.title || book.id}: ${error?.message || "Unknown error"}`);
         } finally {
@@ -1435,13 +1281,13 @@ function Books() {
   }, [loading, error, books]);
 
   async function deleteBook(book) {
-    const { data, error } = await supabase
-      .from("books")
-      .update({ deleted_at: new Date().toISOString() })
-      .eq("id", book.id)
-      .is("deleted_at", null)
-      .select("id")
-      .maybeSingle();
+    let data = null;
+    let error = null;
+    try {
+      data = await softDeleteFirebaseBook(book.id);
+    } catch (deleteError) {
+      error = deleteError;
+    }
     if (error || !data) {
       await logAdminAction({
         action: "book_delete_failed",
@@ -1982,23 +1828,9 @@ function BookModal({ book, onClose, onSaved }) {
     const isCover = folder === "covers";
     const uploadFile = isCover ? await optimizeBookCover(file) : file;
     const safeName = uploadFile.name.toLowerCase().replace(/[^a-z0-9._-]/g, "-");
-    const path = `${folder}/${crypto.randomUUID()}-${safeName}`;
-    const storage = supabase.storage.from(bucket);
-
-    const { error } = await storage.upload(path, uploadFile, {
-      upsert: false,
-      contentType: uploadFile.type || undefined,
-      cacheControl: "31536000"
-    });
-    if (error) {
-      const fileLabel = isCover ? "book cover" : "book PDF";
-      if (/bucket not found/i.test(error.message || "")) {
-        throw new Error(
-          `The Supabase Storage bucket "${bucket}" was not found while uploading the ${fileLabel}. Verify the Admin app's deployed Storage configuration.`
-        );
-      }
-      throw new Error(`Unable to upload the ${fileLabel}: ${error.message || "Storage upload failed."}`);
-    }
+    const firebasePath = `${folder}/${crypto.randomUUID()}-${safeName}`;
+    const uploaded = await uploadFirebaseAsset(firebasePath, uploadFile, uploadFile.type || (isCover ? "image/webp" : "application/pdf"));
+    const path = uploaded.path;
 
     await logAdminAction({
       action: isCover ? "book_cover_uploaded" : "book_pdf_uploaded",
@@ -2015,11 +1847,7 @@ function BookModal({ book, onClose, onSaved }) {
     // paths and signed by the mobile reader only after entitlement checks.
     if (!isCover) return path;
 
-    const { data } = storage.getPublicUrl(path);
-    if (!data?.publicUrl) {
-      throw new Error("The book cover uploaded, but Supabase did not return a public URL.");
-    }
-    return data.publicUrl;
+    return uploaded.downloadUrl;
   }
 
   async function saveBook(e) {
@@ -2086,34 +1914,12 @@ function BookModal({ book, onClose, onSaved }) {
       let result;
 
       if (form.id) {
-        const { data: updatedBook, error } = await supabase
-          .from("books")
-          .update(payload)
-          .eq("id", form.id)
-          .select("id")
-          .maybeSingle();
-
-        if (error) {
-          console.error("Book update failed", {
-            bookId: form.id,
-            message: error.message,
-            code: error.code,
-            details: error.details,
-            hint: error.hint
-          });
-
-          throw error;
+        const bookRef = doc(firestore, "books", form.id);
+        const updatedBook = await getDocs(query(collection(firestore, "books"), where("__name__", "==", form.id)));
+        if (updatedBook.empty || updatedBook.docs[0].data().deleted_at) {
+          throw new Error("The book could not be updated because it was not found or has been deleted.");
         }
-
-        if (!updatedBook) {
-          console.error("Book update affected no rows", {
-            bookId: form.id
-          });
-
-          throw new Error(
-            "The book could not be updated. Please check administrator permissions."
-          );
-        }
+        await updateDoc(bookRef, { ...payload, updated_at: serverTimestamp() });
 
         const changedFields = Object.keys(payload).filter((key) =>
           JSON.stringify(payload[key]) !== JSON.stringify(book?.[key] ?? (key === "price" ? 0 : key === "is_locked" ? false : null))
@@ -2140,21 +1946,10 @@ function BookModal({ book, onClose, onSaved }) {
         return;
       }
 
-      result = await supabase
-        .from("books")
-        .insert(payload)
-        .select()
-        .single();
-
-      if (result?.error) {
-        console.error("Book create failed", {
-          message: result.error.message,
-          code: result.error.code,
-          details: result.error.details,
-          hint: result.error.hint
-        });
-        throw result.error;
-      }
+      const bookId = crypto.randomUUID();
+      const bookRef = doc(firestore, "books", bookId);
+      result = { data: { id: bookId, ...payload } };
+      await setDoc(bookRef, { ...payload, created_at: serverTimestamp(), updated_at: serverTimestamp(), deleted_at: null });
 
       await logAdminAction({
         action: "book_created",
@@ -3201,17 +2996,40 @@ function PaymentsPage({ canManagePayments }) {
     const requestSequence = ++loadSequence.current;
     setLoading(true);
     setError("");
-    const [bookResult, gameResult, userRows] = await Promise.all([
-      supabase.from("payment_submissions").select("*, books(title, price)").order("created_at", { ascending: false }),
-      supabase.from("game_payment_submissions").select("*, games(title, price)").order("created_at", { ascending: false }),
-      listUsers().catch(() => [])
-    ]);
+    let bookRows = [];
+    let gameRows = [];
+    let userRows = [];
+    try {
+      const [bookSubmissions, gameSubmissions, bookCatalog, gameCatalog, loadedUsers] = await Promise.all([
+        getDocs(query(collection(firestore, "payment_submissions"), orderBy("created_at", "desc"))),
+        getDocs(query(collection(firestore, "game_payment_submissions"), orderBy("created_at", "desc"))),
+        getDocs(collection(firestore, "books")),
+        getDocs(collection(firestore, "games")),
+        listUsers().catch(() => [])
+      ]);
+      const booksById = new Map(bookCatalog.docs.map((doc) => [doc.id, { id: doc.id, ...doc.data() }]));
+      const gamesById = new Map(gameCatalog.docs.map((doc) => [doc.id, { id: doc.id, ...doc.data() }]));
+      bookRows = bookSubmissions.docs.map((doc) => {
+        const row = { id: doc.id, ...doc.data() };
+        const bookId = row.book_id || row.item_id;
+        return { ...row, item_type: "book", item: booksById.get(bookId) || null, book_id: bookId };
+      });
+      gameRows = gameSubmissions.docs.map((doc) => {
+        const row = { id: doc.id, ...doc.data() };
+        const gameId = row.game_id || row.item_id;
+        return { ...row, item_type: "game", item: gamesById.get(gameId) || null, game_id: gameId };
+      });
+      userRows = loadedUsers;
+    } catch (loadError) {
+      if (requestSequence !== loadSequence.current) return;
+      setError(loadError?.message || "Unable to load payment submissions from Firebase.");
+      setLoading(false);
+      return;
+    }
     if (requestSequence !== loadSequence.current) return;
-    const paymentError = bookResult.error || gameResult.error;
-    if (paymentError) setError(paymentError.message);
     const rawRows = [
-      ...(bookResult.data || []).map((row) => ({ ...row, item_type: "book", item: row.books, book_id: row.book_id })),
-      ...(gameResult.data || []).map((row) => ({ ...row, item_type: "game", item: row.games, game_id: row.game_id }))
+      ...bookRows,
+      ...gameRows
     ];
     const grouped = new Map();
     for (const row of rawRows) {
@@ -3254,10 +3072,15 @@ function PaymentsPage({ canManagePayments }) {
       targetName: payment.payment_items?.map((item) => item.title).join(", ") || getPaymentProduct(payment)?.title || null,
       details: { customer_id: payment.user_id, amount: payment.amount, item_count: payment.payment_items?.length || 1 }
     });
-    const { data, error: signedUrlError } = await supabase.storage
-      .from(PAYMENT_PROOF_BUCKET)
-      .createSignedUrl(payment.proof_image_url, 3600);
-    if (!signedUrlError) setProofUrl(data.signedUrl);
+    try {
+      const proofLocation = String(payment.proof_image_url || "");
+      const url = proofLocation.startsWith("http")
+        ? proofLocation
+        : await getDownloadURL(firebaseStorageRef(firebaseStorage, proofLocation));
+      setProofUrl(url);
+    } catch (signedUrlError) {
+      console.error("Unable to resolve Firebase payment proof.", signedUrlError);
+    }
   }
 
   const userById = new Map(users.map((user) => [user.id, user]));
@@ -3271,28 +3094,27 @@ function PaymentsPage({ canManagePayments }) {
     if (!selected) return;
     setBusy(true);
     try {
-      const { data, error: reviewError } = await supabase.rpc("review_cart_payment", {
-        p_user_id: selected.user_id,
-        p_reference_number: selected.reference_number,
-        p_proof_image_url: selected.proof_image_url,
-        p_action: action,
-        p_note: note.trim() || null
+      const reviewCartPayment = httpsCallable(getFunctions(firebaseApp, "asia-southeast1"), "reviewCartPayment");
+      const { data } = await reviewCartPayment({
+        user_id: selected.user_id,
+        reference_number: selected.reference_number,
+        proof_image_url: selected.proof_image_url,
+        action,
+        note: note.trim() || null
       });
-      if (reviewError) throw reviewError;
 
       let notificationFailed = false;
       if (action === "verify") {
-        const { error: emailError } = await supabase.functions.invoke("send-payment-verification-email", {
-          body: {
+        try {
+          const sendPaymentVerificationEmail = httpsCallable(getFunctions(firebaseApp, "asia-southeast1"), "sendPaymentVerificationEmail");
+          await sendPaymentVerificationEmail({
             user_id: selected.user_id,
-            reference_number: selected.reference_number,
-            proof_image_url: selected.proof_image_url
-          }
-        });
-        if (emailError) {
+            reference_number: selected.reference_number
+          });
+        } catch (emailError) {
           notificationFailed = true;
           console.error("Payment was verified, but the admin email notification failed.", {
-            code: emailError.name || "PAYMENT_EMAIL_FAILED"
+            code: emailError.code || "PAYMENT_EMAIL_FAILED"
           });
         }
       }
@@ -3433,8 +3255,13 @@ function SettingsPage() {
         const qrPaths = Array.isArray(nextPaymentSettings.qr_image_urls) ? nextPaymentSettings.qr_image_urls : [];
         const nextPreviews = await Promise.all(qrPaths.map(async (path) => {
           if (/^https?:\/\//i.test(path)) return { path, url: path };
-          const { data, error } = await supabase.storage.from(PAYMENT_PROOF_BUCKET).createSignedUrl(path, 3600);
-          return { path, url: error ? "" : (data?.signedUrl || "") };
+          try {
+            const url = await getDownloadURL(firebaseStorageRef(firebaseStorage, path));
+            return { path, url };
+          } catch (storageError) {
+            console.error("Unable to resolve Firebase payment QR asset.", { code: storageError?.code || "STORAGE_READ_FAILED" });
+            return { path, url: "" };
+          }
         }));
         setPaymentQrPreviews(nextPreviews.filter((item) => item.url));
       } catch (err) {
@@ -3462,13 +3289,11 @@ function SettingsPage() {
 
   async function resetPassword() {
     try {
-      const { data, error: userError } = await supabase.auth.getUser();
-      if (userError) throw userError;
-      const email = data.user?.email;
-      if (!email) throw new Error("Unable to find the current admin email.");
+      const currentAdmin = firebaseAuth.currentUser;
+      const email = currentAdmin?.email;
+      if (!currentAdmin || !email) throw new Error("Unable to find the current Firebase admin account.");
 
-      const { error } = await supabase.auth.resetPasswordForEmail(email);
-      if (error) throw error;
+      await sendPasswordResetEmail(firebaseAuth, email);
       await logAdminAction({
         action: "password_reset_requested",
         targetType: "admin_account",
@@ -3489,7 +3314,7 @@ function SettingsPage() {
   async function saveUploadSettings() {
     setUploadSettingsLoading(true);
     try {
-      const normalized = await saveUploadSettingsToSupabase(uploadSettings);
+      const normalized = await saveUploadSettingsToFirebase(uploadSettings);
       await logAdminAction({
         action: "upload_settings_updated",
         targetType: "app_setting",
@@ -3516,7 +3341,7 @@ function SettingsPage() {
   async function savePaymentSettings() {
     setPaymentSettingsLoading(true);
     try {
-      const normalized = await savePaymentSettingsToSupabase({
+      const normalized = await savePaymentSettingsToFirebase({
         ...paymentSettings,
         qr_image_urls: Array.isArray(paymentSettings.qr_image_urls) ? paymentSettings.qr_image_urls : (paymentSettings.qr_image_url ? [paymentSettings.qr_image_url] : []),
         qr_image_url: (Array.isArray(paymentSettings.qr_image_urls) ? paymentSettings.qr_image_urls[0] : paymentSettings.qr_image_url) || ""
@@ -3551,8 +3376,7 @@ function SettingsPage() {
     setPaymentSettingsLoading(true);
     try {
       const path = `settings/${crypto.randomUUID()}-${file.name.toLowerCase().replace(/[^a-z0-9._-]/g, "-")}`;
-      const { error: uploadError } = await supabase.storage.from(PAYMENT_PROOF_BUCKET).upload(path, file, { upsert: false, contentType: file.type });
-      if (uploadError) throw uploadError;
+      const uploaded = await uploadFirebaseAsset(path, file, file.type || "image/png");
       await logAdminAction({
         action: "payment_qr_uploaded",
         targetType: "app_setting",
@@ -3560,13 +3384,13 @@ function SettingsPage() {
         targetName: "GCash QR Code",
         details: { file_type: file.type || "image/unknown" }
       });
-      const { data } = await supabase.storage.from(PAYMENT_PROOF_BUCKET).createSignedUrl(path, 3600);
+      const previewUrl = uploaded.downloadUrl;
       setPaymentSettings((current) => {
         const currentPaths = Array.isArray(current.qr_image_urls) ? current.qr_image_urls : (current.qr_image_url ? [current.qr_image_url] : []);
         const nextPaths = [...new Set([...currentPaths, path])];
         return { ...current, qr_image_urls: nextPaths, qr_image_url: nextPaths[0] || "" };
       });
-      if (data?.signedUrl) setPaymentQrPreviews((current) => [...current, { path, url: data.signedUrl }]);
+      if (previewUrl) setPaymentQrPreviews((current) => [...current, { path, url: previewUrl }]);
       showToast("QR code uploaded. Save payment settings to apply it.", "success");
     } catch (err) {
       await logAdminAction({
@@ -3600,26 +3424,7 @@ function SettingsPage() {
       const originalPillar = pillars.find((pillar) => pillar.id === editingPillarId);
 
       if (editingPillarId && originalPillar) {
-        const { error } = await supabase
-          .from("pillars")
-          .update({ name: trimmed })
-          .eq("id", editingPillarId);
-
-        if (error) throw error;
-
-        const { data: bookRows } = await supabase
-          .from("books")
-          .select("id, pillar")
-          .eq("pillar", originalPillar.name);
-
-        if (bookRows && bookRows.length > 0) {
-          const { error: updateBookError } = await supabase
-            .from("books")
-            .update({ pillar: trimmed })
-            .in("id", bookRows.map((book) => book.id));
-
-          if (updateBookError) throw updateBookError;
-        }
+        await renameFirebasePillar(editingPillarId, originalPillar.name, trimmed);
 
         await logAdminAction({
           action: "pillar_updated",
@@ -3630,13 +3435,7 @@ function SettingsPage() {
         });
         showToast("Pillar updated successfully.", "success");
       } else {
-        const { data, error } = await supabase
-          .from("pillars")
-          .insert({ name: trimmed })
-          .select("id")
-          .single();
-
-        if (error) throw error;
+        const data = await createFirebasePillar(trimmed);
         await logAdminAction({ action: "pillar_created", targetType: "pillar", targetId: data.id, targetName: trimmed, details: { name: trimmed } });
         showToast("Pillar added successfully.", "success");
       }
@@ -3688,27 +3487,7 @@ function SettingsPage() {
         : null;
 
       if (editingCategoryId && originalCategory) {
-        const { error } = await supabase
-          .from("categories")
-          .update({ name: trimmed })
-          .eq("id", editingCategoryId);
-
-        if (error) throw error;
-
-        const { data: matchingBooks } = await supabase
-          .from("books")
-          .select("id, pillar, subcategory")
-          .eq("pillar", selectedPillar.name)
-          .eq("subcategory", originalCategory.name);
-
-        if (matchingBooks && matchingBooks.length > 0) {
-          const { error: updateBooksError } = await supabase
-            .from("books")
-            .update({ subcategory: trimmed })
-            .in("id", matchingBooks.map((book) => book.id));
-
-          if (updateBooksError) throw updateBooksError;
-        }
+        await renameFirebaseCategory(editingCategoryId, selectedPillar.name, originalCategory.name, trimmed);
 
         await logAdminAction({
           action: "category_updated",
@@ -3719,13 +3498,7 @@ function SettingsPage() {
         });
         showToast("Category updated successfully.", "success");
       } else {
-        const { data, error } = await supabase
-          .from("categories")
-          .insert({ pillar_id: categoryPillarId, name: trimmed })
-          .select("id")
-          .single();
-
-        if (error) throw error;
+        const data = await createFirebaseCategory(categoryPillarId, trimmed);
         await logAdminAction({
           action: "category_created",
           targetType: "category",
@@ -3756,12 +3529,7 @@ function SettingsPage() {
     const nextLocked = !Boolean(category.is_locked);
 
     try {
-      const { error } = await supabase
-        .from("categories")
-        .update({ is_locked: nextLocked })
-        .eq("id", category.id);
-
-      if (error) throw error;
+      await setFirebaseCategoryLock(category.id, nextLocked);
 
       await logAdminAction({
         action: nextLocked ? "category_locked" : "category_unlocked",
@@ -3800,12 +3568,7 @@ function SettingsPage() {
 
     try {
       if (target.type === "pillar") {
-        const { data: deleted, error } = await supabase.rpc("soft_delete_pillar", {
-          p_pillar_id: target.id,
-        });
-
-        if (error) throw error;
-        if (!deleted) throw new Error("This pillar could not be found or is already deleted.");
+        await softDeleteFirebaseTaxonomy("pillar", target.id);
 
         await logAdminAction({
           action: "pillar_deleted",
@@ -3819,12 +3582,7 @@ function SettingsPage() {
 
       if (target.type === "category") {
         const targetPillar = pillars.find((pillar) => pillar.id === target.pillar_id);
-        const { data: deleted, error } = await supabase.rpc("soft_delete_category", {
-          p_category_id: target.id,
-        });
-
-        if (error) throw error;
-        if (!deleted) throw new Error("This category could not be found or is already deleted.");
+        await softDeleteFirebaseTaxonomy("category", target.id);
 
         await logAdminAction({
           action: "category_deleted",
