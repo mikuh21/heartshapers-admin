@@ -1,46 +1,39 @@
-# Heartshapers Firebase Migration Plan (Admin)
+# Heartshapers Firebase Migration (Admin)
 
-## Objective
-Move the React + Vite admin dashboard off Supabase while retaining the current dashboard workflows, records, file pipeline, role controls, payment review, and optimization trackers.
+## Current status — 2026-11-06
 
-## Current source baseline
-- Vite/React admin currently depends on `@supabase/supabase-js`; client setup is `src/lib/supabase.js`.
-- `src/lib/adminUsers.js` invokes Supabase Edge Functions for user listing, role/status changes, and book/game access overrides.
-- `src/lib/games.js` performs Firestore-replacement relevant direct Postgres and Storage operations (currently Supabase) for game records and asset upload.
-- Supabase Edge Functions currently include `admin-management`, `admin-user-management`, OTP functions, and payment verification email function.
-- Supabase migrations hold important domain rules: book/game purchases, VIP access, user access overrides, payment workflows, soft-deletion, audit logs, and PDF entitlement logic.
+The admin dashboard runtime now uses Firebase Auth/custom claims, Firestore, Firebase Storage, and callable Cloud Functions. The current branch has book/game CRUD, taxonomy/settings management, optimization/recovery trackers, user and access management, payment review, admin audit logs, verification email, protected mobile asset URL issuance, OTP password reset, and server-validated cart submission. Supabase Edge Function source remains in the repository as legacy migration/reference material; the admin app and Functions packages no longer depend on the Supabase SDK.
 
-## Firebase target responsibilities
-- Firebase Authentication with custom claims for `admin` / `super_admin`; enforce claims on backend.
-- Cloud Firestore for books/games/catalog taxonomy, users/profile records, purchase/payment records, access overrides, app settings, upload settings, audit logs, and optimization progress.
-- Cloud Storage for covers, PDFs, game assets, avatars, and payment proof files.
-- Cloud Functions for admin user management, content mutation, payment verification/rejection, cart review transaction, OTP/email flows, signed/protected asset access, and audit writes.
-- Security Rules and server-side validation: clients must not approve payments, assign privileged claims, create purchase entitlements, or override protected records.
+Recent migration work also adds server-side cart total/entitlement checks, single-use hashed OTP reset tokens, UID-scoped payment-proof upload rules, private book/game asset signing, Firestore composite indexes, and safe mobile self-profile creation. The malformed escaped newlines in `functions/userManagement.js` were corrected so the Functions source parses.
 
-## Migration sequence
-1. Inventory every Supabase table/query/RPC/function/bucket and its callers in dashboard pages and libraries.
-2. Define Firestore document contracts and Storage object path mapping; retain legacy content IDs where practical.
-3. Implement Firebase web config through Vite environment variables; use no service-account secret in browser code.
-4. Build auth adapter and role claim checks, then user management via callable/HTTPS Cloud Functions.
-5. Implement data adapters for books, games, taxonomy, app settings, upload settings, users, access overrides, purchases, payments, admin audit, and soft deletion.
-6. Port upload pipelines to Firebase Storage, preserving optimization and stable paths, resumable upload handling, content types, cache headers, and recovery tracker semantics.
-7. Port payment-review operations to trusted Functions with Firestore transactions (including multi-item cart review atomicity).
-8. Port OTP/email functions, with secrets in managed Secret Manager; do not expose SMTP/OTP pepper.
-9. Implement Firestore and Storage Rules, automated emulator tests, and export/import reconciliation.
-10. Validate admin build and flows, then coordinate cutover with mobile. Keep Supabase available until both apps pass.
+## Current status — 2026-11-06
 
-## Critical preservation requirements
-- Preserve admin vs super-admin privilege separation.
-- Preserve purchase records and VIP entitlements; user UID mapping must remain explicit.
-- Preserve verified-purchase protection on access override operations.
-- Preserve soft-delete timestamps and retain existing content/storage references.
-- Preserve optimization progress/retry/recovery keys and never reprocess already optimized assets needlessly.
-- Payment approval/rejection and access grants are server-trusted operations only.
-- No service-account JSON, production data dumps, secrets, or payment proof files committed to Git.
+The confirmed production target is `brewing-connections-ce316`. The Android app (`com.heartshapers.app`) and Admin Web app are registered; Firestore `(default)` is STANDARD in `asia-southeast1`; Auth Email/Password and Blaze billing are enabled.
 
-## Verification checklist
-- Admin login and claim validation; user listing/status/access changes.
-- Book/game CRUD, taxonomy filters, uploads, optimizations, and soft deletion.
-- Payment queue, verify/reject, and multi-item cart atomicity.
-- Audit log, app settings, upload limit settings, OTP/email flows.
-- Firestore/Storage Rules emulator tests, Vite production build, data counts and sampled ownership reconciliation.
+Completed:
+
+- Deployed all 20 Cloud Functions on Node.js 22, Firestore Rules/indexes, and Storage Rules. `getProtectedBookPdfUrl` was subsequently updated and redeployed to translate legacy Supabase PDF references into Firebase Storage paths.
+- Imported and reconciled source Firestore data. Seventeen Supabase users were matched by normalized email to Firebase Auth accounts, profile documents were created under their Firebase UIDs, and custom role/tier/legacy UID claims were set (5 admin, 2 super_admin, 10 user). One extra Firebase account remains unmapped and has no migrated role.
+- Re-keyed 14 book purchases, 1 game purchase, 2 book access overrides, and 3 game access overrides to Firebase UID-based keys. Updated payment/admin ownership references and verified all current payment/purchase/access owner IDs map to Firebase Auth accounts.
+- Replicated 602 game cards and 8 game rules into each game's subcollections while retaining legacy root collections.
+- Configured function secrets for SMTP verification/reset delivery and OTP hashing. Do not print or commit their values.
+
+Remaining / blocked:
+
+- The project owner confirms the book PDFs and game PDFs are already in Firebase Storage. Inventory found 57 PDF objects (39 under `pdfs/`, 18 under `games/`); the 18 game PDFs span the 8 game-name folders. The current 8 Firestore game records have no `source_pdf_path`; the app uses Firestore game/card records.
+- Compared the 42 book records with Storage by exact normalized title. Updated 39 `pdf_url` fields to verified Firebase object paths and preserved their prior values in `legacy_supabase_pdf_url`; readback confirmed the 39 paths exist. The owner will upload the remaining three PDFs later; those records stay unchanged until upload: Working with Integrity, The Spirit-Filled Home, and The Anchor and the Anvil.
+- Web hosting is on DreamHost per the owner. Firebase Hosting is not configured; build the admin SPA and deploy its `dist/` output through the existing DreamHost workflow.
+- Supabase Storage returns HTTP 402 `exceed_cached_egress_quota`, blocking source-side inventory/download of remaining non-PDF assets. Private game assets and payment proofs need an authorized private-object export path only if reconciliation shows they are absent; keep proof files private.
+- The admin web app has not been deployed to Firebase Hosting in this migration. The updated mobile app must also be rebuilt/released. No end-to-end production cutover has been completed.
+- Notifications have no active source table or mobile backend implementation in the inspected source.
+- Validation: Admin Vite production build passed with a large-chunk advisory; `node --check functions/index.js` and `node --check functions/userManagement.js` passed. Android JS export passed with Hermes bytecode disabled. Full mobile `npm run lint` exits with `import/namespace` parser errors for imports of `ProfileScreen.js`; the file parses under Babel/Espree and targeted ESLint, and disabling the three affected import-analysis rules yields zero errors with 8 warnings. No automated test suite or Firebase emulator end-to-end/security tests are configured/run.
+
+## Deployment source
+
+This repository owns the admin web app, Cloud Functions, Firestore Rules/indexes, and Storage Rules. Backend resources have been deployed to `brewing-connections-ce316`; the admin web app still needs a Hosting release. Keep Supabase available and validate administrator separation, payment/cart atomicity, content access, soft deletion, upload recovery, and optimized asset-cache behavior before cutover.
+
+## Security and data notes
+
+- Client code cannot grant roles, verify payments, create purchases, change access overrides, or access protected book/game assets directly.
+- Auth UID differences require a verified mapping for all historical purchases and access overrides.
+- Never commit service-account credentials, SMTP/OTP secrets, production exports, or payment-proof files.

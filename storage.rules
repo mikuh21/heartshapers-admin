@@ -55,7 +55,7 @@ service firebase.storage {
     }
 
     match /games/{gameId}/cards/{assetPath=**} {
-      allow get: if signedIn();
+      allow get: if hasAdminRole();
       allow list: if hasAdminRole();
       allow create, update: if hasAdminRole() && validImageUpload();
       allow delete: if hasAdminRole();
@@ -78,9 +78,13 @@ service firebase.storage {
 
     // Payment proofs are private. Customer uploads/deletes should be mediated
     // by callable functions that validate user UID and pending payment context.
-    match /payment-proofs/{assetPath=**} {
+    match /payment-proofs/{userId}/payments/{paymentId}/{fileName} {
       allow read: if hasAdminRole();
-      allow write: if false;
+      allow create: if signedIn()
+        && request.auth.uid == userId
+        && request.resource.size < 12 * 1024 * 1024
+        && request.resource.contentType.matches('image/(jpeg|png|webp)');
+      allow update, delete: if false;
     }
 
     // Avatar files are publicly displayable; writes are restricted to the

@@ -41,6 +41,12 @@ service cloud.firestore {
           );
         allow create, update, delete: if hasAdminRole();
       }
+      match /game_rules/{ruleId} {
+        allow read: if hasAdminRole()
+          || (signedIn()
+            && get(/databases/$(database)/documents/games/$(gameId)).data.get('deleted_at', null) == null);
+        allow create, update, delete: if hasAdminRole();
+      }
     }
 
     match /pillars/{pillarId} {
@@ -55,11 +61,30 @@ service cloud.firestore {
       allow create, update, delete: if hasAdminRole();
     }
 
+    match /game_rules/{ruleId} {
+      allow read: if hasAdminRole() || signedIn();
+      allow create, update, delete: if hasAdminRole();
+    }
+
+    match /game_placements/{placementId} {
+      allow read: if hasAdminRole() || signedIn();
+      allow create, update, delete: if hasAdminRole();
+    }
+
     // Profile documents are owner-readable. Users may update profile display
     // fields only; access/role/verification flags remain server-controlled.
     match /users/{userId} {
       allow read: if hasAdminRole() || (signedIn() && request.auth.uid == userId);
-      allow create, delete: if false;
+      allow create: if signedIn()
+        && request.auth.uid == userId
+        && request.resource.data.keys().hasOnly(['uid', 'email', 'full_name', 'role', 'membership_tier', 'email_verified', 'disabled', 'created_at', 'updated_at'])
+        && request.resource.data.uid == userId
+        && request.resource.data.email == request.auth.token.email
+        && request.resource.data.role == 'user'
+        && request.resource.data.membership_tier == 'regular'
+        && request.resource.data.email_verified == request.auth.token.get('email_verified', false)
+        && request.resource.data.disabled == false;
+      allow delete: if false;
       allow update: if signedIn()
         && request.auth.uid == userId
         && request.resource.data.diff(resource.data).affectedKeys()
@@ -92,6 +117,16 @@ service cloud.firestore {
     }
 
     match /game_purchases/{purchaseId} {
+      allow read: if hasAdminRole() || ownsRecord();
+      allow create, update, delete: if false;
+    }
+
+    match /user_book_access/{accessId} {
+      allow read: if hasAdminRole() || ownsRecord();
+      allow create, update, delete: if false;
+    }
+
+    match /user_game_access/{accessId} {
       allow read: if hasAdminRole() || ownsRecord();
       allow create, update, delete: if false;
     }

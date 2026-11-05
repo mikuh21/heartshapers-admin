@@ -74,7 +74,7 @@ async function sendVerificationEmail(user) {
     from: SMTP_FROM.value(),
     to: user.email,
     subject: "Verify your HEARTSHAPERS account",
-    text: `Hello ${user.displayName || "there"},\\n\\nPlease verify your HEARTSHAPERS account using this link:\\n${link}\\n\\nIf you did not request this account, you can ignore this email.`,
+    text: `Hello ${user.displayName || "there"},\n\nPlease verify your HEARTSHAPERS account using this link:\n${link}\n\nIf you did not request this account, you can ignore this email.`,
     html: `<p>Hello ${user.displayName || "there"},</p><p>Please verify your HEARTSHAPERS account:</p><p><a href="${link}">Verify email address</a></p><p>If you did not request this account, you can ignore this email.</p>`
   });
 }
@@ -104,7 +104,10 @@ exports.createManagedUser = onCall({ region: REGION, secrets: MAIL_SECRETS }, as
       membership_tier: String(membership_tier).toLowerCase() === "vip" ? "vip" : "regular",
       email_verified: false, disabled: false, created_at: FieldValue.serverTimestamp(), updated_at: FieldValue.serverTimestamp()
     }, { merge: true });
-    let emailSent = false;\n    try { await sendVerificationEmail({ ...user, displayName: name }); emailSent = true; } catch (mailError) { console.error("Verification email delivery failed.", { uid: user.uid, code: mailError.code || mailError.name || "MAIL_FAILED" }); }\n    return { user: publicUser({ ...user, customClaims: { role: "user", membership_tier }, displayName: name }), email_sent: emailSent };
+    let emailSent = false;
+    try { await sendVerificationEmail({ ...user, displayName: name }); emailSent = true; }
+    catch (mailError) { console.error("Verification email delivery failed.", { uid: user.uid, code: mailError.code || mailError.name || "MAIL_FAILED" }); }
+    return { user: publicUser({ ...user, customClaims: { role: "user", membership_tier }, displayName: name }), email_sent: emailSent };
   } catch (error) {
     if (error.code === "auth/email-already-exists") throw new HttpsError("already-exists", "EMAIL_ALREADY_EXISTS");
     throw new HttpsError("internal", "USER_CREATE_FAILED");
@@ -147,7 +150,10 @@ exports.createManagedAdmin = onCall({ region: REGION, secrets: MAIL_SECRETS }, a
       uid: user.uid, email: normalizedEmail, full_name: name, role: "admin",
       email_verified: false, disabled: false, created_at: FieldValue.serverTimestamp(), updated_at: FieldValue.serverTimestamp()
     }, { merge: true });
-    let emailSent = false;\n    try { await sendVerificationEmail({ ...user, displayName: name }); emailSent = true; } catch (mailError) { console.error("Administrator verification email delivery failed.", { uid: user.uid, code: mailError.code || mailError.name || "MAIL_FAILED" }); }\n    return { admin: publicUser({ ...user, customClaims: { role: "admin", full_name: name }, displayName: name }), email_sent: emailSent };
+    let emailSent = false;
+    try { await sendVerificationEmail({ ...user, displayName: name }); emailSent = true; }
+    catch (mailError) { console.error("Administrator verification email delivery failed.", { uid: user.uid, code: mailError.code || mailError.name || "MAIL_FAILED" }); }
+    return { admin: publicUser({ ...user, customClaims: { role: "admin", full_name: name }, displayName: name }), email_sent: emailSent };
   } catch (error) {
     if (error.code === "auth/email-already-exists") throw new HttpsError("already-exists", "An account with this email already exists.");
     throw new HttpsError("internal", "Unable to create the administrator account. Please try again.");
