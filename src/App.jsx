@@ -1,4 +1,4 @@
-import React, { createContext, useContext, useEffect, useMemo, useRef, useState } from "react";
+import React, { createContext, lazy, Suspense, useContext, useEffect, useMemo, useRef, useState } from "react";
 import { flushSync } from "react-dom";
 import {
   BookOpen,
@@ -46,7 +46,7 @@ import {
   SUPPORTED_UPLOAD_TYPES
 } from "./lib/uploadSettings";
 import { logAdminAction } from "./lib/adminAudit";
-import GamesPage from "./components/GamesPage";
+const GamesPage = lazy(() => import("./components/GamesPage"));
 import { listFirebaseBooks, softDeleteFirebaseBook, updateFirebaseBookCover } from "./lib/firebaseBooks";
 import { ensureFirebaseDefaultTaxonomy, loadFirebaseManagedSettings, createFirebasePillar, renameFirebasePillar, createFirebaseCategory, renameFirebaseCategory, setFirebaseCategoryLock, softDeleteFirebaseTaxonomy } from "./lib/firebaseTaxonomy";
 import { uploadFirebaseAsset, deleteFirebaseAsset } from "./lib/firebaseAssetStorage";
@@ -907,7 +907,11 @@ function AdminApp({ session }) {
         <div className="content">
           {page === "dashboard" && <Dashboard goBooks={() => setPage("books")} />}
           {page === "books" && <Books />}
-          {page === "games" && <GamesPage canManageGames={canManageUsers} ConfirmModal={ConfirmModal} showToast={showToast} />}
+          {page === "games" && (
+            <Suspense fallback={<p className="field-hint">Loading game management...</p>}>
+              <GamesPage canManageGames={canManageUsers} ConfirmModal={ConfirmModal} showToast={showToast} />
+            </Suspense>
+          )}
           {page === "users" && <UsersPage canManageUsers={canManageUsers} />}
           {page === "payments" && <PaymentsPage canManagePayments={canManageUsers} />}
           {page === "admins" && (canManageAdmins ? <AdminsPage /> : <AccessDeniedPage message="You do not have permission to manage administrator accounts." />)}

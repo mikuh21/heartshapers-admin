@@ -262,6 +262,24 @@ exports.getProtectedGameAssetUrls = onCall({ region: "asia-southeast1" }, async 
   return { urls, expiresInSeconds: 900 };
 });
 
+// Game rules and card documents can contain paid content, so mobile clients
+// must fetch them through this entitlement-checked callable instead of reading
+// the nested Firestore collections directly.
+exports.getProtectedGameContent = onCall({ region: "asia-southeast1" }, async (request) => {
+  if (!request.auth) throw new HttpsError("unauthenticated", "Sign in to open this game.");
+  const gameId = String(request.data?.gameId || "").trim();
+  const contentType = String(request.data?.contentType || "");
+  if (!gameId || gameId.length > 128 || !["rules", "cards"].includes(contentType)) {
+    throw new HttpsError("invalid-argument", "Invalid game content request.");
+  }
+  await requireContentEntitlement(request.auth.uid, "game", gameId, request);
+  const collectionName = contentType === "cards" ? "game_cards" : "game_rules";
+  const snapshot = await db.collection("games").doc(gameId)
+    .collection(collectionName).orderBy("sort_order", "asc").get();
+  const items = snapshot.docs.map((document) => ({ id: document.id, ...document.data() }));
+  return { items };
+});
+
 function otpDigest(email, value) {
   return crypto.createHmac("sha256", OTP_PEPPER.value()).update(`${email}:${value}`).digest("hex");
 }

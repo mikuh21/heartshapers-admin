@@ -34,17 +34,13 @@ service cloud.firestore {
       allow create, update, delete: if hasAdminRole();
 
       match /game_cards/{cardId} {
-        allow read: if hasAdminRole()
-          || (
-            signedIn()
-            && get(/databases/$(database)/documents/games/$(gameId)).data.get('deleted_at', null) == null
-          );
+        // Card contents are delivered by getProtectedGameContent after the
+        // Cloud Function verifies the user's purchase or access entitlement.
+        allow read: if hasAdminRole();
         allow create, update, delete: if hasAdminRole();
       }
       match /game_rules/{ruleId} {
-        allow read: if hasAdminRole()
-          || (signedIn()
-            && get(/databases/$(database)/documents/games/$(gameId)).data.get('deleted_at', null) == null);
+        allow read: if hasAdminRole();
         allow create, update, delete: if hasAdminRole();
       }
     }
@@ -62,7 +58,7 @@ service cloud.firestore {
     }
 
     match /game_rules/{ruleId} {
-      allow read: if hasAdminRole() || signedIn();
+      allow read: if hasAdminRole();
       allow create, update, delete: if hasAdminRole();
     }
 
