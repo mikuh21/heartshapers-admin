@@ -151,7 +151,7 @@ export async function updateUserStatus(userId, disabled) {
 function getCreateUserErrorMessage(code, status) {
   const messages = {
     FULL_NAME_REQUIRED: "Full name is required.",
-    EMAIL_INVALID: "Please enter a valid Gmail address.",
+    EMAIL_INVALID: "Please enter a valid email address.",
     PASSWORD_INVALID: "Password must be 8–16 characters and contain at least one special character.",
     EMAIL_ALREADY_EXISTS: "An account with this email already exists.",
     USER_CREATE_FAILED: "Unable to create the user account right now. Please try again.",

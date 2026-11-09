@@ -2351,7 +2351,7 @@ function CreateUserModal({ onClose, onCreated }) {
 
     const trimmedEmail = form.email.trim();
     if (!trimmedEmail) errors.email = "Email is required.";
-    else if (!/^[^\s@]+@gmail\.com$/i.test(trimmedEmail)) errors.email = "Enter a valid Gmail address.";
+    else if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(trimmedEmail)) errors.email = "Enter a valid email address.";
 
     if (!form.password) errors.password = "Password is required.";
     else if (form.password.length < 8 || form.password.length > 16) errors.password = "Password must be 8-16 characters long.";
@@ -2405,7 +2405,7 @@ function CreateUserModal({ onClose, onCreated }) {
             {fieldErrors.full_name && <div className="field-error">{fieldErrors.full_name}</div>}
 
             <label>Email <span className="required-marker">*</span></label>
-            <input type="email" value={form.email} onChange={(e) => updateField("email", e.target.value)} placeholder="name@gmail.com" />
+            <input type="email" value={form.email} onChange={(e) => updateField("email", e.target.value)} placeholder="you@example.com" />
             {fieldErrors.email && <div className="field-error">{fieldErrors.email}</div>}
 
             <label>Membership Tier <span className="required-marker">*</span></label>
