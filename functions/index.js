@@ -226,7 +226,7 @@ exports.claimMobileDevice = onCall({ region: "asia-southeast1" }, async (request
   if (!request.auth) throw new HttpsError("unauthenticated", "Sign in before linking this device.");
   const deviceId = String(request.data?.deviceId || "");
   const platform = String(request.data?.platform || "");
-  if (!/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(deviceId) || !["android", "ios"].includes(platform)) {
+  if (!/^[0-9a-f]{64}$/i.test(deviceId) || !["android", "ios"].includes(platform)) {
     throw new HttpsError("invalid-argument", "Invalid mobile device details.");
   }
 
