@@ -33,6 +33,9 @@ import {
 import { getFunctions, httpsCallable } from "firebase/functions";
 import { ref as firebaseStorageRef, getDownloadURL } from "firebase/storage";
 import { firebaseApp, firebaseAuth, firebaseStorage, firestore } from "./lib/firebase";
+const adminFunctions = getFunctions(firebaseApp, "asia-southeast1");
+const getAdminSetting = async (key) => (await httpsCallable(adminFunctions, "getAdminSetting")({ key })).data;
+const setAdminSetting = async (key, value) => (await httpsCallable(adminFunctions, "setAdminSetting")({ key, value })).data;
 const COVER_BUCKET = "covers";
 const PDF_BUCKET = "pdfs";
 import { collection, doc, getDocs, query, where, orderBy, setDoc, updateDoc, serverTimestamp } from "firebase/firestore";
@@ -45,7 +48,7 @@ import {
   normalizeUploadType,
   SUPPORTED_UPLOAD_TYPES
 } from "./lib/uploadSettings";
-import { logAdminAction } from "./lib/adminAudit";
+import { listAdminAuditLogs, logAdminAction } from "./lib/adminAudit";
 const GamesPage = lazy(() => import("./components/GamesPage"));
 import { listFirebaseBooks, softDeleteFirebaseBook, updateFirebaseBookCover } from "./lib/firebaseBooks";
 import { ensureFirebaseDefaultTaxonomy, loadFirebaseManagedSettings, createFirebasePillar, renameFirebasePillar, createFirebaseCategory, renameFirebaseCategory, setFirebaseCategoryLock, softDeleteFirebaseTaxonomy } from "./lib/firebaseTaxonomy";
