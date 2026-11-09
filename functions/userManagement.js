@@ -80,6 +80,39 @@ async function sendVerificationEmail(user) {
 }
 const MAIL_SECRETS = [SMTP_HOST, SMTP_PORT, SMTP_USER, SMTP_PASSWORD, SMTP_FROM, VERIFY_CONTINUE_URL];
 
+exports.sendUserVerificationEmail = onCall({ region: REGION, secrets: MAIL_SECRETS }, async (request) => {
+  if (!request.auth) throw new HttpsError("unauthenticated", "Sign in to request a verification email.");
+  const user = await getAuth().getUser(request.auth.uid);
+  if (user.disabled) throw new HttpsError("permission-denied", "This account is disabled.");
+  if (!user.email) throw new HttpsError("failed-precondition", "This account has no email address.");
+  if (user.emailVerified) throw new HttpsError("failed-precondition", "This email address is already verified.");
+
+  const throttleRef = db.collection("email_delivery_limits").doc(`verify_${user.uid}`);
+  const now = Date.now();
+  await db.runTransaction(async (transaction) => {
+    const snapshot = await transaction.get(throttleRef);
+    const lastSentAt = Number(snapshot.data()?.verificationEmailLastSentAt || 0);
+    if (now - lastSentAt < 60_000) {
+      throw new HttpsError("resource-exhausted", "Please wait before requesting another verification email.");
+    }
+    transaction.set(throttleRef, {
+      verificationEmailLastSentAt: now,
+      updated_at: FieldValue.serverTimestamp(),
+    }, { merge: true });
+  });
+
+  try {
+    await sendVerificationEmail(user);
+    return { sent: true };
+  } catch (error) {
+    console.error("User verification email delivery failed.", {
+      uid: user.uid,
+      code: error.code || error.name || "MAIL_FAILED",
+    });
+    throw new HttpsError("internal", "Unable to send the verification email right now.");
+  }
+});
+
 exports.listManagedUsers = onCall({ region: REGION }, async (request) => {
   requireAdmin(request);
   const users = await listAllUsers();
