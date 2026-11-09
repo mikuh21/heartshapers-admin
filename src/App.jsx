@@ -62,7 +62,8 @@ import {
   createUser,
   createAdmin,
   updateAdminStatus,
-  updateUserStatus
+  updateUserStatus,
+  resetUserDevice
 } from "./lib/adminUsers";
 
 const DEFAULT_BOOK_AUTHOR = "Compiled and Edited by HEARTSHAPERS";
@@ -2180,6 +2181,21 @@ function UsersPage({ canManageUsers }) {
     }
   }
 
+  async function handleDeviceReset(user) {
+    if (!window.confirm(`Reset the mobile device linked to ${user.email || "this user"}? Their current phone will be signed out and the next phone used to sign in will become the linked device.`)) return;
+    setActionLoadingId(user.id);
+    try {
+      const updatedUser = await resetUserDevice(user.id);
+      setUsers((current) => current.map((item) => item.id === user.id ? { ...item, ...updatedUser, device_bound: false } : item));
+      setSelectedUser((currentUser) => currentUser?.id === user.id ? { ...currentUser, ...updatedUser, device_bound: false } : currentUser);
+      showToast("Mobile device link reset. The next phone to sign in will be linked.", "success");
+    } catch (err) {
+      setError(err.message || "Unable to reset this user's mobile device link.");
+    } finally {
+      setActionLoadingId(null);
+    }
+  }
+
   return (
     <>
       <div className="page-heading">
@@ -2230,6 +2246,7 @@ function UsersPage({ canManageUsers }) {
                   <th>Membership Tier</th>
                   <th>Account Status</th>
                   <th>Email Verification</th>
+                  <th>Mobile Device</th>
                   <th>Date Joined</th>
                   <th>Actions</th>
                 </tr>
@@ -2262,6 +2279,11 @@ function UsersPage({ canManageUsers }) {
                         {user.email_verified ? "Verified" : "Unverified"}
                       </span>
                     </td>
+                    <td>
+                      <span className={`status ${user.device_bound ? "active" : "unverified"}`}>
+                        {user.device_bound ? "Linked" : "Not linked"}
+                      </span>
+                    </td>
                     <td>{formatDate(user.created_at)}</td>
                     <td>
                       <div className="user-actions">
@@ -2284,6 +2306,13 @@ function UsersPage({ canManageUsers }) {
                         >
                           {actionLoadingId === user.id ? <Loader2 size={16} className="spin" /> : user.disabled ? "Enable" : "Disable"}
                         </button>
+                        {user.device_bound && <button
+                          className="secondary-btn small"
+                          onClick={() => handleDeviceReset(user)}
+                          disabled={actionLoadingId === user.id}
+                        >
+                          {actionLoadingId === user.id ? <Loader2 size={16} className="spin" /> : "Reset device"}
+                        </button>}
                       </div>
                     </td>
                   </tr>

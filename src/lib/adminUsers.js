@@ -86,7 +86,8 @@ function normalizeUser(rawUser = {}) {
     ),
     membership_tier: String(appMetadata.membership_tier || rawUser.membership_tier || "regular").trim().toLowerCase() === "vip"
       ? "vip"
-      : "regular"
+      : "regular",
+    device_bound: Boolean(rawUser.device_bound || appMetadata.device_bound)
   };
 }
 
@@ -145,6 +146,11 @@ export async function updateGameUserAccess({ gameId, userId, accessStatus }) {
 
 export async function updateUserStatus(userId, disabled) {
   const data = await callUserManagement("updateManagedUserStatus", { userId, disabled });
+  return normalizeUser(data.user || data || null);
+}
+
+export async function resetUserDevice(userId) {
+  const data = await callUserManagement("resetManagedUserDevice", { userId });
   return normalizeUser(data.user || data || null);
 }
 

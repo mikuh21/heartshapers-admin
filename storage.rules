@@ -16,6 +16,19 @@ service firebase.storage {
         );
     }
 
+    function hasActiveMobileDevice() {
+      return signedIn()
+        && request.auth.token.get('device_id', '') is string
+        && request.auth.token.get('device_id', '') != ''
+        && firestore.exists(/databases/(default)/documents/device_bindings/$(request.auth.uid))
+        && firestore.get(/databases/(default)/documents/device_bindings/$(request.auth.uid)).data.device_id
+          == request.auth.token.get('device_id', '');
+    }
+
+    function customerSignedIn() {
+      return hasAdminRole() || hasActiveMobileDevice();
+    }
+
     function validImageUpload() {
       return request.resource != null
         && request.resource.size < 12 * 1024 * 1024
@@ -48,7 +61,7 @@ service firebase.storage {
     // Game covers and optimized game-card images can be displayed to signed-in
     // customers. Only admins may manage their contents.
     match /games/{gameId}/cover/{assetPath=**} {
-      allow get: if signedIn();
+      allow get: if customerSignedIn();
       allow list: if hasAdminRole();
       allow create, update: if hasAdminRole() && validImageUpload();
       allow delete: if hasAdminRole();
@@ -63,14 +76,14 @@ service firebase.storage {
 
     // QR images are customer-visible after sign-in. Admins manage assets.
     match /settings/{assetPath=**} {
-      allow get: if signedIn();
+      allow get: if customerSignedIn();
       allow list: if hasAdminRole();
       allow create, update: if hasAdminRole() && validImageUpload();
       allow delete: if hasAdminRole();
     }
 
     match /payment-qr/{assetPath=**} {
-      allow get: if signedIn();
+      allow get: if customerSignedIn();
       allow list: if hasAdminRole();
       allow create, update: if hasAdminRole() && validImageUpload();
       allow delete: if hasAdminRole();
@@ -80,7 +93,7 @@ service firebase.storage {
     // by callable functions that validate user UID and pending payment context.
     match /payment-proofs/{userId}/payments/{paymentId}/{fileName} {
       allow read: if hasAdminRole();
-      allow create: if signedIn()
+      allow create: if hasActiveMobileDevice()
         && request.auth.uid == userId
         && request.resource.size < 12 * 1024 * 1024
         && request.resource.contentType.matches('image/(jpeg|png|webp)');
@@ -92,11 +105,11 @@ service firebase.storage {
     match /profile-avatars/{userId}/{assetPath=**} {
       allow get: if true;
       allow list: if hasAdminRole();
-      allow create, update: if signedIn()
+      allow create, update: if hasActiveMobileDevice()
         && request.auth.uid == userId
         && validImageUpload()
         && request.resource.size < 5 * 1024 * 1024;
-      allow delete: if signedIn() && request.auth.uid == userId;
+      allow delete: if hasActiveMobileDevice() && request.auth.uid == userId;
     }
 
     match /{assetPath=**} {

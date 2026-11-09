@@ -16,21 +16,34 @@ service cloud.firestore {
         );
     }
 
+    function hasActiveMobileDevice() {
+      return signedIn()
+        && request.auth.token.get('device_id', '') is string
+        && request.auth.token.get('device_id', '') != ''
+        && exists(/databases/$(database)/documents/device_bindings/$(request.auth.uid))
+        && get(/databases/$(database)/documents/device_bindings/$(request.auth.uid)).data.get('device_id', '')
+          == request.auth.token.get('device_id', '');
+    }
+
+    function customerSignedIn() {
+      return hasAdminRole() || hasActiveMobileDevice();
+    }
+
     function ownsRecord() {
-      return signedIn() && resource.data.get('user_id', '') == request.auth.uid;
+      return customerSignedIn() && resource.data.get('user_id', '') == request.auth.uid;
     }
 
     // Catalog metadata is readable to signed-in customers only while active.
     // Administrators can read and manage active or soft-deleted records.
     match /books/{bookId} {
       allow read: if hasAdminRole()
-        || (signedIn() && resource.data.get('deleted_at', null) == null);
+        || (customerSignedIn() && resource.data.get('deleted_at', null) == null);
       allow create, update, delete: if hasAdminRole();
     }
 
     match /games/{gameId} {
       allow read: if hasAdminRole()
-        || (signedIn() && resource.data.get('deleted_at', null) == null);
+        || (customerSignedIn() && resource.data.get('deleted_at', null) == null);
       allow create, update, delete: if hasAdminRole();
 
       match /game_cards/{cardId} {
@@ -47,13 +60,13 @@ service cloud.firestore {
 
     match /pillars/{pillarId} {
       allow read: if hasAdminRole()
-        || (signedIn() && resource.data.get('deleted_at', null) == null);
+        || (customerSignedIn() && resource.data.get('deleted_at', null) == null);
       allow create, update, delete: if hasAdminRole();
     }
 
     match /categories/{categoryId} {
       allow read: if hasAdminRole()
-        || (signedIn() && resource.data.get('deleted_at', null) == null);
+        || (customerSignedIn() && resource.data.get('deleted_at', null) == null);
       allow create, update, delete: if hasAdminRole();
     }
 
@@ -63,15 +76,15 @@ service cloud.firestore {
     }
 
     match /game_placements/{placementId} {
-      allow read: if hasAdminRole() || signedIn();
+      allow read: if customerSignedIn();
       allow create, update, delete: if hasAdminRole();
     }
 
     // Profile documents are owner-readable. Users may update profile display
     // fields only; access/role/verification flags remain server-controlled.
     match /users/{userId} {
-      allow read: if hasAdminRole() || (signedIn() && request.auth.uid == userId);
-      allow create: if signedIn()
+      allow read: if hasAdminRole() || (hasActiveMobileDevice() && request.auth.uid == userId);
+      allow create: if hasActiveMobileDevice()
         && request.auth.uid == userId
         && request.resource.data.keys().hasOnly(['uid', 'email', 'full_name', 'role', 'membership_tier', 'email_verified', 'disabled', 'created_at', 'updated_at'])
         && request.resource.data.uid == userId
@@ -81,7 +94,7 @@ service cloud.firestore {
         && request.resource.data.email_verified == request.auth.token.get('email_verified', false)
         && request.resource.data.disabled == false;
       allow delete: if false;
-      allow update: if signedIn()
+      allow update: if hasActiveMobileDevice()
         && request.auth.uid == userId
         && request.resource.data.diff(resource.data).affectedKeys()
           .hasOnly(['full_name', 'avatar_path', 'updated_at'])
@@ -131,11 +144,15 @@ service cloud.firestore {
     // Settings mutations and audit history are Cloud-Function-only.
     match /app_settings/{settingId} {
       allow read: if hasAdminRole()
-        || (signedIn() && settingId == 'payment_settings');
+        || (customerSignedIn() && settingId == 'payment_settings');
       allow create, update, delete: if false;
     }
 
     match /admin_logs/{logId} {
+      allow read, write: if false;
+    }
+
+    match /device_bindings/{userId} {
       allow read, write: if false;
     }
 

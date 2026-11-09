@@ -41,6 +41,7 @@ function publicUser(user) {
     created_at: metadata.creationTime || null,
     email_verified: Boolean(user.emailVerified),
     disabled: Boolean(user.disabled),
+    device_bound: Boolean(claims.device_id),
     membership_tier: tier,
     role: String(claims.role || claims.roles || "user").toLowerCase(),
   };
@@ -106,6 +107,7 @@ exports.sendUserVerificationEmail = onCall({ region: REGION, secrets: MAIL_SECRE
   if (!request.auth) throw new HttpsError("unauthenticated", "Sign in to request a verification email.");
   const user = await getAuth().getUser(request.auth.uid);
   if (user.disabled) throw new HttpsError("permission-denied", "This account is disabled.");
+  await requireActiveMobileDevice(request);
   if (!user.email) throw new HttpsError("failed-precondition", "This account has no email address.");
   if (user.emailVerified) throw new HttpsError("failed-precondition", "This email address is already verified.");
 
@@ -133,6 +135,46 @@ exports.sendUserVerificationEmail = onCall({ region: REGION, secrets: MAIL_SECRE
     });
     throw new HttpsError("internal", "Unable to send the verification email right now.");
   }
+});
+
+async function requireActiveMobileDevice(request) {
+  const tokenDeviceId = String(request.auth?.token?.device_id || "");
+  if (!request.auth || !tokenDeviceId) {
+    throw new HttpsError("failed-precondition", "This app installation is not linked to the account. Sign out and sign in again.");
+  }
+  const binding = await db.collection("device_bindings").doc(request.auth.uid).get();
+  if (!binding.exists || binding.data()?.device_id !== tokenDeviceId) {
+    throw new HttpsError("permission-denied", "This account is linked to a different mobile device. Contact an administrator to reset its device link.");
+  }
+}
+
+exports.resetManagedUserDevice = onCall({ region: REGION }, async (request) => {
+  requireAdmin(request);
+  const userId = String(request.data?.userId || "").trim();
+  if (!userId) throw new HttpsError("invalid-argument", "A user ID is required.");
+  const auth = getAuth();
+  const user = await auth.getUser(userId);
+  if (["admin", "super_admin"].includes(roleOf({ auth: { token: user.customClaims || {} } }))) {
+    throw new HttpsError("failed-precondition", "Administrator devices cannot be reset here.");
+  }
+
+  const claims = { ...(user.customClaims || {}) };
+  delete claims.device_id;
+  await auth.setCustomUserClaims(userId, claims);
+  await auth.revokeRefreshTokens(userId);
+  await db.collection("device_bindings").doc(userId).set({
+    device_id: null,
+    platform: null,
+    reset_at: FieldValue.serverTimestamp(),
+    reset_by: request.auth.uid,
+  }, { merge: true });
+  await db.collection("admin_logs").add({
+    action: "user_mobile_device_reset",
+    admin_email: request.auth.token.email || "",
+    details: { user_id: userId },
+    created_at: FieldValue.serverTimestamp(),
+  });
+  return { user: publicUser({ ...user, customClaims: claims }) };
 });
 
 exports.sendManagedPasswordResetEmail = onCall({ region: REGION, secrets: MAIL_SECRETS }, async (request) => {
@@ -210,6 +252,7 @@ exports.updateManagedUserStatus = onCall({ region: REGION }, async (request) => 
     throw new HttpsError("failed-precondition", "Administrator accounts must be managed separately.");
   }
   await getAuth().updateUser(String(userId), { disabled });
+  if (disabled) await getAuth().revokeRefreshTokens(String(userId));
   await db.collection("users").doc(String(userId)).set({ disabled, updated_at: FieldValue.serverTimestamp() }, { merge: true });
   return { user: publicUser({ ...target, disabled }) };
 });

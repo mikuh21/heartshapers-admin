@@ -105,6 +105,7 @@ exports.reviewCartPayment = onCall({ region: "asia-southeast1" }, async (request
 exports.submitCartPayment = onCall({ region: "asia-southeast1" }, async (request) => {
   if (!request.auth) throw new HttpsError("unauthenticated", "Sign in before submitting a payment.");
   const uid = request.auth.uid;
+  await requireActiveMobileDevice(request);
   if ((await getAuth().getUser(uid)).disabled) throw new HttpsError("permission-denied", "This account is disabled.");
   const { items, amount, reference_number, proof_image_url } = request.data || {};
   const reference = String(reference_number || "").trim();
@@ -197,6 +198,7 @@ async function requireContentEntitlement(uid, type, itemId, request) {
   const roleValues = [...(Array.isArray(request.auth.token.roles) ? request.auth.token.roles : [request.auth.token.roles]), request.auth.token.role]
     .map((value) => String(value || "").toLowerCase());
   if (roleValues.some((role) => ["admin", "super_admin"].includes(role))) return;
+  await requireActiveMobileDevice(request);
   if (!item.exists || item.data().deleted_at) throw new HttpsError("not-found", "This content is unavailable.");
   const tier = String(request.auth.token.membership_tier || user.customClaims?.membership_tier || "regular").toLowerCase();
   if (tier === "vip") return;
@@ -205,6 +207,50 @@ async function requireContentEntitlement(uid, type, itemId, request) {
   if (status === "free" || (!item.data().is_locked && status !== "locked")) return;
   throw new HttpsError("permission-denied", "Your account does not have access to this content.");
 }
+
+async function requireActiveMobileDevice(request) {
+  if (!request.auth) throw new HttpsError("unauthenticated", "Sign in first.");
+  const tokenDeviceId = String(request.auth.token.device_id || "");
+  if (!tokenDeviceId) throw new HttpsError("failed-precondition", "This app installation is not linked to the account. Sign out and sign in again.");
+  const [user, bindingSnapshot] = await Promise.all([
+    getAuth().getUser(request.auth.uid),
+    db.collection("device_bindings").doc(request.auth.uid).get(),
+  ]);
+  if (user.disabled) throw new HttpsError("permission-denied", "This account is disabled.");
+  if (!bindingSnapshot.exists || bindingSnapshot.data().device_id !== tokenDeviceId) {
+    throw new HttpsError("permission-denied", "This account is linked to a different mobile device. Contact an administrator to reset its device link.");
+  }
+}
+
+exports.claimMobileDevice = onCall({ region: "asia-southeast1" }, async (request) => {
+  if (!request.auth) throw new HttpsError("unauthenticated", "Sign in before linking this device.");
+  const deviceId = String(request.data?.deviceId || "");
+  const platform = String(request.data?.platform || "");
+  if (!/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(deviceId) || !["android", "ios"].includes(platform)) {
+    throw new HttpsError("invalid-argument", "Invalid mobile device details.");
+  }
+
+  const auth = getAuth();
+  const user = await auth.getUser(request.auth.uid);
+  if (user.disabled) throw new HttpsError("permission-denied", "This account is disabled.");
+  const bindingRef = db.collection("device_bindings").doc(user.uid);
+  await db.runTransaction(async (transaction) => {
+    const snapshot = await transaction.get(bindingRef);
+    const existingDeviceId = String(snapshot.data()?.device_id || "");
+    if (existingDeviceId && existingDeviceId !== deviceId) {
+      throw new HttpsError("failed-precondition", "This account is already linked to another mobile device. Contact an administrator to move it.");
+    }
+    transaction.set(bindingRef, {
+      device_id: deviceId,
+      platform,
+      linked_at: snapshot.data()?.linked_at || FieldValue.serverTimestamp(),
+      last_seen_at: FieldValue.serverTimestamp(),
+    }, { merge: true });
+  });
+
+  await auth.setCustomUserClaims(user.uid, { ...(user.customClaims || {}), device_id: deviceId });
+  return { linked: true };
+});
 
 exports.getProtectedBookPdfUrl = onCall({ region: "asia-southeast1" }, async (request) => {
   if (!request.auth) throw new HttpsError("unauthenticated", "Sign in to read this book.");
