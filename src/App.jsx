@@ -36,7 +36,7 @@ import { firebaseApp, firebaseAuth, firebaseStorage, firestore } from "./lib/fir
 const COVER_BUCKET = "covers";
 const PDF_BUCKET = "pdfs";
 import { collection, doc, getDocs, query, where, orderBy, setDoc, updateDoc, serverTimestamp } from "firebase/firestore";
-import { signInWithEmailAndPassword, signOut as firebaseSignOut, getIdTokenResult, sendPasswordResetEmail, onAuthStateChanged } from "firebase/auth";
+import { signInWithEmailAndPassword, signOut as firebaseSignOut, getIdTokenResult, onAuthStateChanged } from "firebase/auth";
 import heartshapersLogo from "./assets/heartshapers-logo.svg?no-inline";
 import {
   DEFAULT_UPLOAD_SETTINGS,
@@ -3297,7 +3297,8 @@ function SettingsPage() {
       const email = currentAdmin?.email;
       if (!currentAdmin || !email) throw new Error("Unable to find the current Firebase admin account.");
 
-      await sendPasswordResetEmail(firebaseAuth, email);
+      const sendResetEmail = httpsCallable(getFunctions(firebaseApp, "asia-southeast1"), "sendManagedPasswordResetEmail");
+      await sendResetEmail();
       await logAdminAction({
         action: "password_reset_requested",
         targetType: "admin_account",

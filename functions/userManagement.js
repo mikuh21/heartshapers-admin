@@ -78,6 +78,28 @@ async function sendVerificationEmail(user) {
     html: `<p>Hello ${user.displayName || "there"},</p><p>Please verify your HEARTSHAPERS account:</p><p><a href="${link}">Verify email address</a></p><p>If you did not request this account, you can ignore this email.</p>`
   });
 }
+
+async function sendPasswordResetEmail(user) {
+  const link = await getAuth().generatePasswordResetLink(user.email, {
+    url: VERIFY_CONTINUE_URL.value(),
+    handleCodeInApp: false
+  });
+  const nodemailer = require("nodemailer");
+  const port = Number(SMTP_PORT.value() || 587);
+  const transport = nodemailer.createTransport({
+    host: SMTP_HOST.value(),
+    port,
+    secure: port === 465,
+    auth: { user: SMTP_USER.value(), pass: SMTP_PASSWORD.value() }
+  });
+  await transport.sendMail({
+    from: SMTP_FROM.value(),
+    to: user.email,
+    subject: "Reset your HEARTSHAPERS password",
+    text: `Hello ${user.displayName || "there"},\n\nUse this link to reset your HEARTSHAPERS password:\n${link}\n\nIf you did not request a password reset, you can ignore this email.`,
+    html: `<p>Hello ${user.displayName || "there"},</p><p>Use this link to reset your HEARTSHAPERS password:</p><p><a href="${link}">Reset password</a></p><p>If you did not request a password reset, you can ignore this email.</p>`
+  });
+}
 const MAIL_SECRETS = [SMTP_HOST, SMTP_PORT, SMTP_USER, SMTP_PASSWORD, SMTP_FROM, VERIFY_CONTINUE_URL];
 
 exports.sendUserVerificationEmail = onCall({ region: REGION, secrets: MAIL_SECRETS }, async (request) => {
@@ -110,6 +132,38 @@ exports.sendUserVerificationEmail = onCall({ region: REGION, secrets: MAIL_SECRE
       code: error.code || error.name || "MAIL_FAILED",
     });
     throw new HttpsError("internal", "Unable to send the verification email right now.");
+  }
+});
+
+exports.sendManagedPasswordResetEmail = onCall({ region: REGION, secrets: MAIL_SECRETS }, async (request) => {
+  requireAdmin(request);
+  const user = await getAuth().getUser(request.auth.uid);
+  if (user.disabled) throw new HttpsError("permission-denied", "This account is disabled.");
+  if (!user.email) throw new HttpsError("failed-precondition", "This account has no email address.");
+
+  const throttleRef = db.collection("email_delivery_limits").doc(`reset_${user.uid}`);
+  const now = Date.now();
+  await db.runTransaction(async (transaction) => {
+    const snapshot = await transaction.get(throttleRef);
+    const lastSentAt = Number(snapshot.data()?.passwordResetEmailLastSentAt || 0);
+    if (now - lastSentAt < 60_000) {
+      throw new HttpsError("resource-exhausted", "Please wait before requesting another password reset email.");
+    }
+    transaction.set(throttleRef, {
+      passwordResetEmailLastSentAt: now,
+      updated_at: FieldValue.serverTimestamp(),
+    }, { merge: true });
+  });
+
+  try {
+    await sendPasswordResetEmail(user);
+    return { sent: true };
+  } catch (error) {
+    console.error("Administrator password reset email delivery failed.", {
+      uid: user.uid,
+      code: error.code || error.name || "MAIL_FAILED",
+    });
+    throw new HttpsError("internal", "Unable to send the password reset email right now.");
   }
 });
 
