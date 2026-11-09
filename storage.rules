@@ -22,7 +22,9 @@ service firebase.storage {
         && request.auth.token.get('device_id', '') != ''
         && firestore.exists(/databases/(default)/documents/device_bindings/$(request.auth.uid))
         && firestore.get(/databases/(default)/documents/device_bindings/$(request.auth.uid)).data.device_id
-          == request.auth.token.get('device_id', '');
+          == request.auth.token.get('device_id', '')
+        && (!firestore.exists(/databases/(default)/documents/users/$(request.auth.uid))
+          || firestore.get(/databases/(default)/documents/users/$(request.auth.uid)).data.disabled != true);
     }
 
     function customerSignedIn() {
