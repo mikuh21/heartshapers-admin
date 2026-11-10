@@ -3076,7 +3076,9 @@ function PaymentsPage({ canManagePayments }) {
       group.payment_items.push({ id: row.item_type === "book" ? row.book_id : row.game_id, type: row.item_type, title: row.item?.title || (row.item_type === "book" ? "Unknown book" : "Unknown game"), price: Number(row.amount ?? row.item?.price ?? 0) });
       group.amount += Number(row.amount || 0);
       group.statuses.push(row.status);
-      if (row.created_at < group.created_at) group.created_at = row.created_at;
+      if (toDateValue(row.created_at) && (!toDateValue(group.created_at) || toDateValue(row.created_at).getTime() < toDateValue(group.created_at).getTime())) {
+        group.created_at = row.created_at;
+      }
       group.status = group.statuses.includes("pending")
         ? "pending"
         : group.statuses.every((status) => status === "verified")
@@ -4021,13 +4023,39 @@ function getInitials(name) {
   return value.slice(0, 2).toUpperCase();
 }
 
+function toDateValue(value) {
+  if (value === null || value === undefined || value === "") return null;
+
+  let date;
+  if (value instanceof Date) {
+    date = value;
+  } else if (typeof value?.toDate === "function") {
+    // Firestore Timestamp instances.
+    date = value.toDate();
+  } else if (typeof value === "number") {
+    // Support millisecond timestamps and legacy Unix seconds.
+    date = new Date(Math.abs(value) < 1e12 ? value * 1000 : value);
+  } else if (typeof value === "string") {
+    date = new Date(value);
+  } else if (typeof value === "object") {
+    const seconds = value.seconds ?? value._seconds;
+    const nanoseconds = value.nanoseconds ?? value._nanoseconds ?? 0;
+    if (Number.isFinite(Number(seconds))) {
+      date = new Date(Number(seconds) * 1000 + Number(nanoseconds) / 1e6);
+    }
+  }
+
+  return date instanceof Date && Number.isFinite(date.getTime()) ? date : null;
+}
+
 function formatDate(value) {
-  if (!value) return "—";
+  const date = toDateValue(value);
+  if (!date) return "—";
   return new Intl.DateTimeFormat(undefined, {
     year: "numeric",
     month: "short",
     day: "numeric"
-  }).format(new Date(value));
+  }).format(date);
 }
 
 export default App;
