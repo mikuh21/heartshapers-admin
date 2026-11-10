@@ -111,7 +111,7 @@ exports.submitCartPayment = onCall({ region: "asia-southeast1" }, async (request
   const reference = String(reference_number || "").trim();
   const proofPath = String(proof_image_url || "");
   if (!Array.isArray(items) || items.length < 1 || items.length > 20 || !reference || reference.length > 120 ||
-      !proofPath.startsWith(`payment-proofs/${uid}/payments/`) || proofPath.includes("..")) {
+      !proofPath.startsWith(`payment-proofs/${uid}-`) || !/^payment-proofs\/[^/]+$/.test(proofPath) || proofPath.includes("..")) {
     throw new HttpsError("invalid-argument", "Invalid cart payment details.");
   }
   const normalized = items.map((item) => ({ type: item?.type, id: String(item?.id || "").trim() }));

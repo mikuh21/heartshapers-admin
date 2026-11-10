@@ -91,12 +91,12 @@ service firebase.storage {
       allow delete: if hasAdminRole();
     }
 
-    // Payment proofs are private. Customer uploads/deletes should be mediated
-    // by callable functions that validate user UID and pending payment context.
-    match /payment-proofs/{userId}/payments/{paymentId}/{fileName} {
+    // Payment proofs are private and stored flat: payment-proofs/{uid}-{paymentId}-{fileName}.
+    // The UID prefix lets rules bind each upload to its owner without nested folders.
+    match /payment-proofs/{fileName} {
       allow read: if hasAdminRole();
       allow create: if hasActiveMobileDevice()
-        && request.auth.uid == userId
+        && fileName.matches('^' + request.auth.uid + '-.*$')
         && request.resource.size < 12 * 1024 * 1024
         && request.resource.contentType.matches('image/(jpeg|png|webp)');
       allow update, delete: if false;
