@@ -19,56 +19,35 @@ import {
 import { logAdminAction } from "../lib/adminAudit";
 import { getGameUserAccess, updateGameUserAccess } from "../lib/adminUsers";
 import { getLegacyGameRuleBlocks, parseInlineFormatting } from "../lib/legacyGameRuleBlocks";
-import {
-  createPdfGame,
-  downloadPdfGameSource,
-  deleteGame,
-  loadGameAccess,
-  listGamesWithCounts,
-  loadGameDetails,
-  updateGameAccess,
-  updateGameWithCover,
-  updatePdfGame
-} from "../lib/games";
+
 import { gameUploadSizeError, loadGameUploadLimit } from "../lib/uploadSettings";
-import { supabase } from "../lib/supabase";
+import { listFirebaseGamesWithCounts, loadFirebaseGameDetails, loadFirebaseGameAccess, updateFirebaseGameAccess, softDeleteFirebaseGame, updateFirebaseGameWithCover } from "../lib/firebaseGames";
+import { createFirebasePdfGame, downloadFirebasePdfGameSource, updateFirebasePdfGame } from "../lib/firebaseGamePublishing";
+import { uploadFirebaseAsset } from "../lib/firebaseAssetStorage";
+import { updateFirebaseGameCover, updateFirebaseGameCardMetadata } from "../lib/firebaseGames";
+import { getFirebaseAssetDownloadUrl } from "../lib/firebaseAssetStorage";
+import { firestore } from "../lib/firebase";
+import { collection, getDocs } from "firebase/firestore";
+import { getFunctions, httpsCallable } from "firebase/functions";
+import { firebaseApp, firebaseAuth } from "../lib/firebase";
+const adminFunctions = getFunctions(firebaseApp, "asia-southeast1");
+const getAdminSetting = async (key) => (await httpsCallable(adminFunctions, "getAdminSetting")({ key })).data;
+const setAdminSetting = async (key, value) => (await httpsCallable(adminFunctions, "setAdminSetting")({ key, value })).data;
 
 const CARD_PAGE_SIZE = 20;
 
 const GAME_COVER_OPTIMIZATION_KEY = "game_cover_optimization_v1";
 
 async function loadGameCoverOptimizationState() {
-  const { data, error } = await supabase
-    .from("app_settings")
-    .select("value")
-    .eq("key", GAME_COVER_OPTIMIZATION_KEY)
-    .maybeSingle();
-  if (error) throw error;
-  const value = data?.value;
+  const { value } = await getAdminSetting(GAME_COVER_OPTIMIZATION_KEY);
   return value && typeof value === "object" && Array.isArray(value.attemptedGameIds)
     ? value
     : { version: 1, attemptedGameIds: [], optimized: 0, skipped: 0, failed: 0 };
 }
 
 async function saveGameCoverOptimizationState(state) {
-  const { data: sessionData, error: sessionError } = await supabase.auth.getSession();
-  const userId = sessionData?.session?.user?.id;
-  if (sessionError || !userId) {
-    const authError = new Error("Your admin session has expired. Sign in again before continuing game-cover optimization.");
-    authError.code = "ADMIN_SESSION_EXPIRED";
-    throw authError;
-  }
-  const { error } = await supabase
-    .from("app_settings")
-    .upsert({
-      key: GAME_COVER_OPTIMIZATION_KEY,
-      value: state,
-      updated_at: new Date().toISOString(),
-      updated_by: userId
-    }, { onConflict: "key" });
-  if (error) throw error;
+  await setAdminSetting(GAME_COVER_OPTIMIZATION_KEY, state);
 }
-
 async function optimizeExistingGameCover(url) {
   if (!url || typeof createImageBitmap !== "function" || typeof document === "undefined") {
     throw new Error("This browser does not support cover optimization.");
@@ -99,32 +78,15 @@ async function optimizeExistingGameCover(url) {
 const PDF_CARD_IMAGE_OPTIMIZATION_KEY = "pdf_game_card_image_optimization_v1";
 
 async function loadPdfCardImageOptimizationState() {
-  const { data, error } = await supabase.from("app_settings").select("value")
-    .eq("key", PDF_CARD_IMAGE_OPTIMIZATION_KEY).maybeSingle();
-  if (error) throw error;
-  const value = data?.value;
+  const { value } = await getAdminSetting(PDF_CARD_IMAGE_OPTIMIZATION_KEY);
   return value && typeof value === "object" && Array.isArray(value.attemptedCardIds)
     ? value
     : { version: 1, attemptedCardIds: [], optimized: 0, skipped: 0, failed: 0 };
 }
 
 async function savePdfCardImageOptimizationState(state) {
-  const { data: sessionData, error: sessionError } = await supabase.auth.getSession();
-  const userId = sessionData?.session?.user?.id;
-  if (sessionError || !userId) {
-    const error = new Error("Your admin session has expired. Sign in again before continuing PDF card image optimization.");
-    error.code = "ADMIN_SESSION_EXPIRED";
-    throw error;
-  }
-  const { error } = await supabase.from("app_settings").upsert({
-    key: PDF_CARD_IMAGE_OPTIMIZATION_KEY,
-    value: state,
-    updated_at: new Date().toISOString(),
-    updated_by: userId
-  }, { onConflict: "key" });
-  if (error) throw error;
+  await setAdminSetting(PDF_CARD_IMAGE_OPTIMIZATION_KEY, state);
 }
-
 async function optimizeExistingPdfCardImage(url) {
   if (!url || typeof createImageBitmap !== "function" || typeof document === "undefined") {
     throw new Error("This browser does not support PDF card image optimization.");
@@ -847,7 +809,7 @@ export default function GamesPage({ canManageGames, ConfirmModal, showToast }) {
     let active = true;
     setLoading(true);
     setError("");
-    listGamesWithCounts()
+    listFirebaseGamesWithCounts()
       .then((result) => {
         if (!active) return;
         setGames(result.games);
@@ -871,8 +833,8 @@ export default function GamesPage({ canManageGames, ConfirmModal, showToast }) {
     let active = true;
 
     const runOptimization = async () => {
-      const { data: authData, error: authError } = await supabase.auth.getUser();
-      if (authError || !authData?.user) {
+      const currentAdmin = firebaseAuth.currentUser;
+      if (!currentAdmin) {
         showToast("Your admin session has expired. Sign in again before optimizing game covers.", "error");
         return;
       }
@@ -916,21 +878,8 @@ export default function GamesPage({ canManageGames, ConfirmModal, showToast }) {
             outcome = "skipped";
           } else {
             uploadedPath = `games/${game.id}/cover/optimized-${Date.now()}.webp`;
-            const { error: uploadError } = await supabase.storage.from("game-assets").upload(uploadedPath, blob, {
-              contentType: "image/webp",
-              cacheControl: "31536000",
-              upsert: false
-            });
-            if (uploadError) throw uploadError;
-            const { data, error: updateError } = await supabase
-              .from("games")
-              .update({ cover_image_url: uploadedPath })
-              .eq("id", game.id)
-              .eq("cover_image_url", game.cover_image_url)
-              .select("id")
-              .maybeSingle();
-            if (updateError) throw updateError;
-            if (!data) throw new Error("The game cover changed during optimization; the original was retained.");
+            await uploadFirebaseAsset(uploadedPath, blob, "image/webp");
+            await updateFirebaseGameCover(game.id, game.cover_image_url, uploadedPath);
             optimizedCount += 1;
             outcome = "optimized";
           }
@@ -1007,8 +956,8 @@ export default function GamesPage({ canManageGames, ConfirmModal, showToast }) {
     let active = true;
 
     const runOptimization = async () => {
-      const { data: authData, error: authError } = await supabase.auth.getUser();
-      if (authError || !authData?.user) {
+      const currentAdmin = firebaseAuth.currentUser;
+      if (!currentAdmin) {
         showToast("Your admin session has expired. Sign in again before optimizing PDF card images.", "error");
         return;
       }
@@ -1021,16 +970,15 @@ export default function GamesPage({ canManageGames, ConfirmModal, showToast }) {
         return;
       }
       const attempted = new Set(state.attemptedCardIds);
-      const { data: cards, error: cardsError } = await supabase
-        .from("game_cards")
-        .select("id,game_id,sort_order,metadata");
-      if (cardsError) {
-        console.error("Unable to list PDF card image assets for optimization.", cardsError);
-        return;
-      }
-      const activeGameIds = new Set(games.map((game) => game.id));
-      const candidates = (cards || []).filter((card) => {
-        if (!activeGameIds.has(card.game_id)) return false;
+      const cardSnapshots = await Promise.all(games.map((game) =>
+        getDocs(collection(firestore, "games", game.id, "game_cards"))
+      ));
+      const cards = cardSnapshots.flatMap((snapshot) => snapshot.docs.map((item) => ({
+        id: item.id,
+        game_id: item.ref.parent.parent?.id,
+        ...item.data()
+      })));
+      const candidates = cards.filter((card) => {
         const metadata = card.metadata && typeof card.metadata === "object" && !Array.isArray(card.metadata)
           ? card.metadata : {};
         const path = String(metadata.pdf_page_path || "");
@@ -1060,34 +1008,16 @@ export default function GamesPage({ canManageGames, ConfirmModal, showToast }) {
         const oldPath = metadata.pdf_page_path;
         let outcome = "failed";
         try {
-          const { data: signedData, error: signedError } = await supabase.storage
-            .from("game-assets").createSignedUrl(oldPath, 300);
-          if (signedError || !signedData?.signedUrl) {
-            throw signedError || new Error("Unable to resolve a temporary card image URL.");
-          }
-          const blob = await optimizeExistingPdfCardImage(signedData.signedUrl);
+          const assetUrl = await getFirebaseAssetDownloadUrl(oldPath);
+          const blob = await optimizeExistingPdfCardImage(assetUrl);
           if (!blob) {
             skippedCount += 1;
             outcome = "skipped";
           } else {
             const uploadedPath = `games/${card.game_id}/cards/optimized-${card.id}-${Date.now()}.webp`;
-            const { error: uploadError } = await supabase.storage.from("game-assets").upload(uploadedPath, blob, {
-              contentType: "image/webp",
-              cacheControl: "31536000",
-              upsert: false
-            });
-            if (uploadError) throw uploadError;
-
+            await uploadFirebaseAsset(uploadedPath, blob, "image/webp");
             const nextMetadata = { ...metadata, pdf_page_path: uploadedPath };
-            const { data, error: updateError } = await supabase.from("game_cards")
-              .update({ metadata: nextMetadata })
-              .eq("id", card.id)
-              .eq("game_id", card.game_id)
-              .eq("metadata", metadata)
-              .select("id")
-              .maybeSingle();
-            if (updateError) throw updateError;
-            if (!data) throw new Error("Card metadata changed during optimization; the original asset remains active.");
+            await updateFirebaseGameCardMetadata(card.game_id, card.id, metadata, nextMetadata);
             optimizedCount += 1;
             outcome = "optimized";
           }
@@ -1167,7 +1097,7 @@ export default function GamesPage({ canManageGames, ConfirmModal, showToast }) {
     if (!deleteTarget) return false;
 
     try {
-      const deletedGame = await deleteGame(deleteTarget.id);
+      const deletedGame = await softDeleteFirebaseGame(deleteTarget.id);
       const auditSucceeded = await logAdminAction({
         action: "game_deleted",
         targetType: "game",
@@ -1253,7 +1183,7 @@ export default function GamesPage({ canManageGames, ConfirmModal, showToast }) {
           <div className="empty-state">
             <Gamepad2 size={34} />
             <strong>{games.length === 0 ? "No games found" : "No matching games"}</strong>
-            <span>{games.length === 0 ? "Games stored in Supabase will appear here." : "Try changing your search or filters."}</span>
+            <span>{games.length === 0 ? "Games will appear here when available." : "Try changing your search or filters."}</span>
           </div>
         ) : (
           <div className="table-wrap">
@@ -1611,8 +1541,8 @@ function AddGameModal({
     let active = true;
     setLoadingExisting(true);
     Promise.all([
-      loadGameDetails(game.id),
-      downloadPdfGameSource(game.id, game.source_pdf_path)
+      loadFirebaseGameDetails(game.id),
+      downloadFirebasePdfGameSource(game.id, game.source_pdf_path)
     ]).then(async ([result, sourceBlob]) => {
       if (!active) return;
       if (result.rules.error) throw result.rules.error;
@@ -1890,14 +1820,14 @@ function AddGameModal({
         rules: form.rules.trim()
       };
       if (isEditing) {
-        const updatedGame = await updatePdfGame(payload, {
+        const updatedGame = await updateFirebasePdfGame(payload, {
           coverFile,
           sourcePdfFile: pdfFile,
           pageFiles
         });
         await onSaved(updatedGame);
       } else {
-        const createdGame = await createPdfGame(payload, coverFile, pdfFile, pageFiles);
+        const createdGame = await createFirebasePdfGame(payload, coverFile, pdfFile, pageFiles);
         await onCreated(createdGame);
       }
     } catch (saveError) {
@@ -2170,8 +2100,8 @@ function GameDetailsModal({ game, gameUploadLimit, uploadLimitError, onClose, on
     setAccessLoaded(false);
     setLoadErrors({});
     Promise.allSettled([
-      loadGameDetails(game.id),
-      loadGameAccess(game.id)
+      loadFirebaseGameDetails(game.id),
+      loadFirebaseGameAccess(game.id)
     ]).then(async ([detailsResult, accessResult]) => {
       const errors = {};
       let nextDetails = { rules: [], cards: [] };
@@ -2281,7 +2211,7 @@ function GameDetailsModal({ game, gameUploadLimit, uploadLimitError, onClose, on
     const subtitleChanged = subtitle !== (game.subtitle ?? "");
     setSavingInfo(true);
     try {
-      const updatedGame = await updateGameWithCover(game.id, Boolean(form.is_locked), {
+      const updatedGame = await updateFirebaseGameWithCover(game.id, Boolean(form.is_locked), {
         title,
         ...(subtitleChanged ? { subtitle } : {}),
         ...(descriptionChanged ? { description } : {}),

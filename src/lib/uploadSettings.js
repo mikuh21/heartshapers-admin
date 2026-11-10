@@ -1,4 +1,5 @@
-import { supabase } from "./supabase";
+import { getFunctions, httpsCallable } from "firebase/functions";
+import { firebaseApp } from "./firebase";
 
 const BYTES_PER_MB = 1024 * 1024;
 export const MAX_UPLOAD_SIZE_MB = 25;
@@ -7,6 +8,9 @@ export const DEFAULT_UPLOAD_SETTINGS = {
   acceptable_file_types: ["pdf", "jpeg", "png", "webp"]
 };
 export const SUPPORTED_UPLOAD_TYPES = ["pdf", "jpeg", "png", "webp"];
+
+const adminFunctions = getFunctions(firebaseApp, "asia-southeast1");
+const getAdminSetting = httpsCallable(adminFunctions, "getAdminSetting");
 
 export function normalizeUploadType(value) {
   const normalized = String(value ?? "").trim().toLowerCase();
@@ -34,18 +38,15 @@ export function normalizeUploadSettings(rawValue = {}) {
 }
 
 export async function loadGameUploadLimit() {
-  const { data, error } = await supabase
-    .from("app_settings")
-    .select("value")
-    .eq("key", "upload_settings")
-    .maybeSingle();
-
-  if (error) {
-    throw new Error(`Unable to load the configured upload limit: ${error.message || "Settings request failed."}`);
+  let value;
+  try {
+    const result = await getAdminSetting({ key: "upload_settings" });
+    value = result.data?.value;
+  } catch (error) {
+    throw new Error(`Unable to load the configured upload limit from Firebase: ${error.message || "Settings request failed."}`);
   }
 
-  const maximumMb = normalizeUploadSettings(data?.value || DEFAULT_UPLOAD_SETTINGS).maximum_upload_size_mb;
-
+  const maximumMb = normalizeUploadSettings(value || DEFAULT_UPLOAD_SETTINGS).maximum_upload_size_mb;
   return {
     maximumMb,
     maximumBytes: maximumMb * BYTES_PER_MB
@@ -57,20 +58,21 @@ export function gameUploadSizeError(limit) {
 }
 
 export function describeGameStorageUploadError(error, limit) {
-  const message = error?.message || String(error || "Unknown Storage error.");
-  const status = Number(error?.statusCode || error?.status);
-  if (/bucket not found/i.test(message)) {
+  const message = error?.message || String(error || "Unknown Firebase Storage error.");
+  const code = String(error?.code || "");
+  if (/storage\/bucket-not-found|bucket not found/i.test(message + " " + code)) {
     return new Error(
-      `The configured Supabase project could not access the game-assets bucket for this upload. Verify the project configuration, bucket name, and Storage permissions. Storage response: ${message}`
+      `Firebase Storage could not access the configured bucket. Verify the Firebase project configuration, bucket name, and Storage permissions. Storage response: ${message}`
     );
   }
   if (
-    status === 413
+    Number(error?.statusCode || error?.status) === 413
+    || /storage\/unauthorized/i.test(code)
     || /entitytoolarge|payload too large|maximum.{0,20}size|file size limit/i.test(message)
   ) {
     return new Error(
-      `Supabase Storage rejected the file within the ${limit.maximumMb} MB Admin upload limit. Check the project's Storage file-size limit. Storage response: ${message}`
+      `Firebase Storage rejected the file within the ${limit.maximumMb} MB Admin upload limit. Check Firebase Storage rules and project limits. Storage response: ${message}`
     );
   }
-  return error;
+  return error instanceof Error ? error : new Error(message);
 }
