@@ -18,6 +18,7 @@ import {
 } from "lucide-react";
 import { logAdminAction } from "../lib/adminAudit";
 import { getGameUserAccess, updateGameUserAccess } from "../lib/adminUsers";
+import { getStorageUrl, uploadStorageObject } from "../lib/firebaseStorage";
 import { getLegacyGameRuleBlocks, parseInlineFormatting } from "../lib/legacyGameRuleBlocks";
 import {
   createPdfGame,
@@ -916,10 +917,9 @@ export default function GamesPage({ canManageGames, ConfirmModal, showToast }) {
             outcome = "skipped";
           } else {
             uploadedPath = `games/${game.id}/cover/optimized-${Date.now()}.webp`;
-            const { error: uploadError } = await supabase.storage.from("game-assets").upload(uploadedPath, blob, {
+            const { error: uploadError } = await uploadStorageObject(uploadedPath, blob, {
               contentType: "image/webp",
-              cacheControl: "31536000",
-              upsert: false
+              cacheControl: "31536000"
             });
             if (uploadError) throw uploadError;
             const { data, error: updateError } = await supabase
@@ -1060,21 +1060,19 @@ export default function GamesPage({ canManageGames, ConfirmModal, showToast }) {
         const oldPath = metadata.pdf_page_path;
         let outcome = "failed";
         try {
-          const { data: signedData, error: signedError } = await supabase.storage
-            .from("game-assets").createSignedUrl(oldPath, 300);
-          if (signedError || !signedData?.signedUrl) {
-            throw signedError || new Error("Unable to resolve a temporary card image URL.");
+          const { data: cardUrlData, error: cardUrlError } = await getStorageUrl(oldPath);
+          if (cardUrlError || !cardUrlData?.publicUrl) {
+            throw cardUrlError || new Error("Unable to resolve the card image URL.");
           }
-          const blob = await optimizeExistingPdfCardImage(signedData.signedUrl);
+          const blob = await optimizeExistingPdfCardImage(cardUrlData.publicUrl);
           if (!blob) {
             skippedCount += 1;
             outcome = "skipped";
           } else {
             const uploadedPath = `games/${card.game_id}/cards/optimized-${card.id}-${Date.now()}.webp`;
-            const { error: uploadError } = await supabase.storage.from("game-assets").upload(uploadedPath, blob, {
+            const { error: uploadError } = await uploadStorageObject(uploadedPath, blob, {
               contentType: "image/webp",
-              cacheControl: "31536000",
-              upsert: false
+              cacheControl: "31536000"
             });
             if (uploadError) throw uploadError;
 

@@ -1,5 +1,11 @@
 import { supabase } from "./supabase";
 import {
+  deleteStorageObjects,
+  downloadStorageFile,
+  getStorageUrl,
+  uploadStorageObject
+} from "./firebaseStorage";
+import {
   describeGameStorageUploadError,
   gameUploadSizeError,
   loadGameUploadLimit
@@ -125,15 +131,11 @@ export async function createPdfGame(gameData, coverFile, sourcePdfFile, pageFile
   const coverPath = `games/${gameData.id}/cover/cover.${coverExtension}`;
   const sourcePdfPath = `games/${gameData.id}/source/content.pdf`;
   try {
-    const { error: coverError } = await supabase.storage
-      .from("game-assets")
-      .upload(coverPath, optimizedCoverFile, { contentType: optimizedCoverFile.type, cacheControl: "31536000", upsert: false });
+    const { error: coverError } = await uploadStorageObject(coverPath, optimizedCoverFile, { contentType: optimizedCoverFile.type, cacheControl: "31536000" });
     if (coverError) throw describeGameStorageUploadError(coverError, uploadLimit);
     uploadedPaths.push(coverPath);
 
-    const { error: sourcePdfError } = await supabase.storage
-      .from("game-assets")
-      .upload(sourcePdfPath, sourcePdfFile, { contentType: "application/pdf", cacheControl: "31536000", upsert: false });
+    const { error: sourcePdfError } = await uploadStorageObject(sourcePdfPath, sourcePdfFile, { contentType: "application/pdf", cacheControl: "31536000" });
     if (sourcePdfError) throw describeGameStorageUploadError(sourcePdfError, uploadLimit);
     uploadedPaths.push(sourcePdfPath);
 
@@ -142,9 +144,7 @@ export async function createPdfGame(gameData, coverFile, sourcePdfFile, pageFile
       const { pageNumber, blob } = pageFiles[index];
       const optimizedPage = await optimizePdfCardPageBlob(blob);
       const path = `games/${gameData.id}/cards/page-${String(index + 1).padStart(4, "0")}.${optimizedPage.extension}`;
-      const { error: pageError } = await supabase.storage
-        .from("game-assets")
-        .upload(path, optimizedPage.blob, { contentType: optimizedPage.contentType, cacheControl: "31536000", upsert: false });
+      const { error: pageError } = await uploadStorageObject(path, optimizedPage.blob, { contentType: optimizedPage.contentType, cacheControl: "31536000" });
       if (pageError) throw describeGameStorageUploadError(pageError, uploadLimit);
       uploadedPaths.push(path);
       cardRows.push({
@@ -243,9 +243,7 @@ export async function createPdfGame(gameData, coverFile, sourcePdfFile, pageFile
   } catch (error) {
     const cleanupErrors = [];
     if (uploadedPaths.length > 0 && !preserveUploadedAssets) {
-      const { error: removeError } = await supabase.storage
-        .from("game-assets")
-        .remove(uploadedPaths);
+      const { error: removeError } = await deleteStorageObjects(uploadedPaths);
       if (removeError) cleanupErrors.push(removeError);
     }
     if (cleanupErrors.length > 0) {
@@ -270,13 +268,11 @@ export async function downloadPdfGameSource(gameId, sourcePdfPath) {
     throw new Error("The PDF source path does not belong to this game.");
   }
 
-  const { data, error } = await supabase.storage
-    .from("game-assets")
-    .download(sourcePdfPath);
-  if (error) {
+  try {
+    return await downloadStorageFile(sourcePdfPath);
+  } catch (error) {
     throw new Error(`Unable to load the game's source PDF: ${error.message || "Unknown storage error"}`);
   }
-  return data;
 }
 
 export async function updatePdfGame(gameData, { coverFile = null, sourcePdfFile = null, pageFiles = null }) {
@@ -349,7 +345,6 @@ export async function updatePdfGame(gameData, { coverFile = null, sourcePdfFile 
     }
   }
 
-  const storage = supabase.storage.from("game-assets");
   const uploadedPaths = [];
   const version = crypto.randomUUID();
   const coverExtension = getGameCoverExtension(optimizedCoverFile);
@@ -379,20 +374,18 @@ export async function updatePdfGame(gameData, { coverFile = null, sourcePdfFile 
 
   try {
     if (coverFile) {
-      const { error } = await storage.upload(newCoverPath, optimizedCoverFile, {
+      const { error } = await uploadStorageObject(newCoverPath, optimizedCoverFile, {
         contentType: optimizedCoverFile.type,
-        cacheControl: "31536000",
-        upsert: false
+        cacheControl: "31536000"
       });
       if (error) throw describeGameStorageUploadError(error, uploadLimit);
       uploadedPaths.push(newCoverPath);
     }
 
     if (sourcePdfFile) {
-      const { error } = await storage.upload(newSourcePath, sourcePdfFile, {
+      const { error } = await uploadStorageObject(newSourcePath, sourcePdfFile, {
         contentType: "application/pdf",
-        cacheControl: "31536000",
-        upsert: false
+        cacheControl: "31536000"
       });
       if (error) throw describeGameStorageUploadError(error, uploadLimit);
       uploadedPaths.push(newSourcePath);
@@ -401,10 +394,9 @@ export async function updatePdfGame(gameData, { coverFile = null, sourcePdfFile 
     if (pageFiles !== null) {
       for (let index = 0; index < pageFiles.length; index += 1) {
         const path = cardRows[index].metadata.pdf_page_path;
-        const { error } = await storage.upload(path, pageFiles[index].blob, {
+        const { error } = await uploadStorageObject(path, pageFiles[index].blob, {
           contentType: "image/png",
-          cacheControl: "31536000",
-          upsert: false
+          cacheControl: "31536000"
         });
         if (error) throw describeGameStorageUploadError(error, uploadLimit);
         uploadedPaths.push(path);
@@ -441,7 +433,7 @@ export async function updatePdfGame(gameData, { coverFile = null, sourcePdfFile 
     const pathsToRemove = [...new Set(oldAssetPaths)].filter((path) => !uploadedPaths.includes(path));
     let assetCleanupWarning = false;
     if (pathsToRemove.length > 0) {
-      const { error: cleanupError } = await storage.remove(pathsToRemove);
+      const { error: cleanupError } = await deleteStorageObjects(pathsToRemove);
       if (cleanupError) {
         assetCleanupWarning = true;
         console.error("Replaced PDF game assets could not be removed.", {
@@ -461,7 +453,7 @@ export async function updatePdfGame(gameData, { coverFile = null, sourcePdfFile 
     const cleanupErrors = [];
     const pathsToClean = uploadedPaths.filter((path) => path !== newCoverPath);
     if (pathsToClean.length > 0) {
-      const { error: cleanupError } = await storage.remove(pathsToClean);
+      const { error: cleanupError } = await deleteStorageObjects(pathsToClean);
       if (cleanupError) cleanupErrors.push(cleanupError);
     }
     const retainedCoverMessage = newCoverPath && uploadedPaths.includes(newCoverPath)
@@ -508,17 +500,15 @@ export async function listGamesWithCounts() {
     if (!coverPath) return [game.id, null];
 
     if (coverPath.startsWith("games/")) {
-      const { data, error } = await supabase.storage
-        .from("game-assets")
-        .createSignedUrl(coverPath, 3600);
-      if (error || !data?.signedUrl) {
+      const { data, error } = await getStorageUrl(coverPath);
+      if (error || !data?.publicUrl) {
         console.error("Game cover URL could not be resolved.", {
           gameId: game.id,
-          code: error?.code || "SIGNED_COVER_URL_UNAVAILABLE"
+          code: error?.code || "COVER_URL_UNAVAILABLE"
         });
         return [game.id, null];
       }
-      return [game.id, data.signedUrl];
+      return [game.id, data.publicUrl];
     }
 
     try {
@@ -686,13 +676,10 @@ export async function updateGameWithCover(gameId, isLocked, changes, coverFile =
     ? `games/${gameId}/cover/${crypto.randomUUID()}.${coverExtension}`
     : null;
   if (coverFile) {
-    const { error: uploadError } = await supabase.storage
-      .from("game-assets")
-      .upload(coverPath, optimizedCoverFile, {
-        contentType: optimizedCoverFile.type,
-        cacheControl: "31536000",
-        upsert: false
-      });
+    const { error: uploadError } = await uploadStorageObject(coverPath, optimizedCoverFile, {
+      contentType: optimizedCoverFile.type,
+      cacheControl: "31536000"
+    });
     if (uploadError) {
       const detailedError = describeGameStorageUploadError(uploadError, uploadLimit);
       throw new Error(`Unable to upload the new cover image: ${detailedError.message || "Storage upload failed."}`);
@@ -726,16 +713,14 @@ export async function updateGameWithCover(gameId, isLocked, changes, coverFile =
 
   let coverDisplayUrl = null;
   if (data.cover_image_url?.startsWith("games/")) {
-    const { data: signedData, error: signedUrlError } = await supabase.storage
-      .from("game-assets")
-      .createSignedUrl(data.cover_image_url, 3600);
-    if (signedUrlError) {
+    const { data: coverUrlData, error: coverUrlError } = await getStorageUrl(data.cover_image_url);
+    if (coverUrlError) {
       console.error("Updated game cover URL could not be resolved.", {
         gameId,
-        code: signedUrlError.code || "SIGNED_COVER_URL_UNAVAILABLE"
+        code: coverUrlError.code || "COVER_URL_UNAVAILABLE"
       });
     } else {
-      coverDisplayUrl = signedData?.signedUrl || null;
+      coverDisplayUrl = coverUrlData?.publicUrl || null;
     }
   } else {
     coverDisplayUrl = data.cover_image_url || null;
@@ -747,69 +732,6 @@ export async function updateGameWithCover(gameId, isLocked, changes, coverFile =
 function describeGameDeletionError(error) {
   const code = error?.code ? ` (${error.code})` : "";
   return `${error?.message || "Unknown error"}${code}`;
-}
-
-async function listGameAssetPaths(storage, folder, rootPath) {
-  const paths = [];
-  const pageSize = 1000;
-  let offset = 0;
-
-  while (true) {
-    const { data: entries, error } = await storage.list(folder, {
-      limit: pageSize,
-      offset,
-      sortBy: { column: "name", order: "asc" }
-    });
-    if (error) {
-      throw new Error(`Unable to list game storage at "${folder}": ${describeGameDeletionError(error)}`);
-    }
-    if (!entries?.length) break;
-
-    for (const entry of entries) {
-      const name = entry?.name;
-      if (
-        typeof name !== "string"
-        || !name
-        || name === "."
-        || name === ".."
-        || /[\/\\\u0000-\u001f]/.test(name)
-      ) {
-        throw new Error(`Storage returned an invalid object name while listing "${folder}". No database records were deleted.`);
-      }
-
-      const path = `${folder}/${name}`;
-      if (entry.id === null) {
-        const nestedPaths = await listGameAssetPaths(storage, path, rootPath);
-        for (const nestedPath of nestedPaths) paths.push(nestedPath);
-      } else if (path.startsWith(`${rootPath}/`)) {
-        paths.push(path);
-      } else {
-        throw new Error("Storage returned an object outside the selected game's folder. Deletion was stopped.");
-      }
-    }
-
-    offset += entries.length;
-    if (entries.length < pageSize) break;
-  }
-
-  return paths;
-}
-
-async function assertGameHasNoProtectedRecords(gameId) {
-  for (const table of ["game_payment_submissions", "game_purchases"]) {
-    const { data, error } = await supabase
-      .from(table)
-      .select("id")
-      .eq("game_id", gameId)
-      .limit(1);
-
-    if (error) {
-      throw new Error(`Unable to check ${table} before deleting the game: ${describeGameDeletionError(error)}. No storage assets were removed.`);
-    }
-    if (data?.length) {
-      throw new Error(`This game has ${table === "game_purchases" ? "purchase" : "payment"} history that must be preserved. The game and its storage assets were not deleted.`);
-    }
-  }
 }
 
 export async function deleteGame(gameId) {

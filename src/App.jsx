@@ -29,7 +29,7 @@ import {
   ZoomOut,
   RotateCcw
 } from "lucide-react";
-import { supabase, COVER_BUCKET, PDF_BUCKET } from "./lib/supabase";
+import { supabase } from "./lib/supabase";
 import heartshapersLogo from "./assets/heartshapers-logo.svg?no-inline";
 import {
   DEFAULT_UPLOAD_SETTINGS,
@@ -40,6 +40,14 @@ import {
 } from "./lib/uploadSettings";
 import { logAdminAction } from "./lib/adminAudit";
 import GamesPage from "./components/GamesPage";
+import StorageConnectionBanner from "./components/StorageConnectionBanner";
+import {
+  deleteStorageObjects,
+  disconnectFirebaseStorage,
+  getStorageUrl,
+  resolveStorageAssetUrl,
+  uploadStorageObject
+} from "./lib/firebaseStorage";
 import {
   getAuthRole,
   isAdminUser,
@@ -182,7 +190,6 @@ const DEFAULT_CATEGORY_OPTIONS = {
   Work: ["Leadership"],
   Ministry: ["Heroes of Faith", "Group Dynamics"]
 };
-const PAYMENT_PROOF_BUCKET = "payment-proofs";
 const DEFAULT_PAYMENT_SETTINGS = {
   payment_method: "gcash",
   qr_image_url: "",
@@ -923,6 +930,7 @@ function AdminApp({ session }) {
 
   async function logout() {
     const { data: sessionData } = await supabase.auth.getSession();
+    await disconnectFirebaseStorage().catch(() => {});
     const result = await supabase.auth.signOut();
     if (!result.error && sessionData.session?.access_token) {
       await logAdminAction({
@@ -1041,6 +1049,8 @@ function AdminApp({ session }) {
             <span>{session.user.email}</span>
           </div>
         </header>
+
+        <StorageConnectionBanner />
 
         <div className="content">
           {page === "dashboard" && <Dashboard goBooks={() => setPage("books")} />}
@@ -1331,16 +1341,17 @@ function Books() {
             outcome = "skipped";
           } else {
             uploadedPath = `covers/optimized/${book.id}-${Date.now()}.webp`;
-            const { error: uploadError } = await supabase.storage.from(COVER_BUCKET).upload(uploadedPath, result.blob, {
+            const { error: uploadError } = await uploadStorageObject(uploadedPath, result.blob, {
               contentType: "image/webp",
-              cacheControl: "31536000",
-              upsert: false
+              cacheControl: "31536000"
             });
             if (uploadError) throw uploadError;
 
-            const { data: publicUrlData } = supabase.storage.from(COVER_BUCKET).getPublicUrl(uploadedPath);
+            const { data: publicUrlData, error: urlError } = await getStorageUrl(uploadedPath);
             const optimizedUrl = publicUrlData?.publicUrl;
-            if (!optimizedUrl) throw new Error("Supabase did not return the optimized cover URL.");
+            if (!optimizedUrl) {
+              throw new Error(`Firebase Storage did not return the optimized cover URL. ${urlError?.message || ""}`.trim());
+            }
 
             const { data: updatedBook, error: updateError } = await supabase
               .from("books")
@@ -1357,7 +1368,7 @@ function Books() {
           }
         } catch (error) {
           if (uploadedPath) {
-            try { await supabase.storage.from(COVER_BUCKET).remove([uploadedPath]); } catch {}
+            try { await deleteStorageObjects([uploadedPath]); } catch {}
           }
           failures.push(`${book.title || book.id}: ${error?.message || "Unknown error"}`);
         } finally {
@@ -1976,27 +1987,20 @@ function BookModal({ book, onClose, onSaved }) {
     return unique;
   }
 
-  async function uploadFile(file, bucket, folder) {
+  async function uploadFile(file, folder) {
     if (!file) return null;
 
     const isCover = folder === "covers";
     const uploadFile = isCover ? await optimizeBookCover(file) : file;
     const safeName = uploadFile.name.toLowerCase().replace(/[^a-z0-9._-]/g, "-");
     const path = `${folder}/${crypto.randomUUID()}-${safeName}`;
-    const storage = supabase.storage.from(bucket);
 
-    const { error } = await storage.upload(path, uploadFile, {
-      upsert: false,
+    const { error } = await uploadStorageObject(path, uploadFile, {
       contentType: uploadFile.type || undefined,
       cacheControl: "31536000"
     });
     if (error) {
       const fileLabel = isCover ? "book cover" : "book PDF";
-      if (/bucket not found/i.test(error.message || "")) {
-        throw new Error(
-          `The Supabase Storage bucket "${bucket}" was not found while uploading the ${fileLabel}. Verify the Admin app's deployed Storage configuration.`
-        );
-      }
       throw new Error(`Unable to upload the ${fileLabel}: ${error.message || "Storage upload failed."}`);
     }
 
@@ -2015,9 +2019,9 @@ function BookModal({ book, onClose, onSaved }) {
     // paths and signed by the mobile reader only after entitlement checks.
     if (!isCover) return path;
 
-    const { data } = storage.getPublicUrl(path);
+    const { data, error: urlError } = await getStorageUrl(path);
     if (!data?.publicUrl) {
-      throw new Error("The book cover uploaded, but Supabase did not return a public URL.");
+      throw new Error(`The book cover uploaded, but its Firebase Storage URL could not be resolved. ${urlError?.message || ""}`.trim());
     }
     return data.publicUrl;
   }
@@ -2063,11 +2067,11 @@ function BookModal({ book, onClose, onSaved }) {
       let pdfUrl = form.pdf_url || null;
 
       if (coverFile) {
-        coverUrl = await uploadFile(coverFile, COVER_BUCKET, "covers");
+        coverUrl = await uploadFile(coverFile, "covers");
       }
 
       if (pdfFile) {
-        pdfUrl = await uploadFile(pdfFile, PDF_BUCKET, "pdfs");
+        pdfUrl = await uploadFile(pdfFile, "pdfs");
       }
 
       const payload = {
@@ -3254,10 +3258,10 @@ function PaymentsPage({ canManagePayments }) {
       targetName: payment.payment_items?.map((item) => item.title).join(", ") || getPaymentProduct(payment)?.title || null,
       details: { customer_id: payment.user_id, amount: payment.amount, item_count: payment.payment_items?.length || 1 }
     });
-    const { data, error: signedUrlError } = await supabase.storage
-      .from(PAYMENT_PROOF_BUCKET)
-      .createSignedUrl(payment.proof_image_url, 3600);
-    if (!signedUrlError) setProofUrl(data.signedUrl);
+    if (payment.proof_image_url) {
+      const proofUrl = await resolveStorageAssetUrl(payment.proof_image_url);
+      if (proofUrl) setProofUrl(proofUrl);
+    }
   }
 
   const userById = new Map(users.map((user) => [user.id, user]));
@@ -3432,9 +3436,8 @@ function SettingsPage() {
         setPaymentSettings(nextPaymentSettings);
         const qrPaths = Array.isArray(nextPaymentSettings.qr_image_urls) ? nextPaymentSettings.qr_image_urls : [];
         const nextPreviews = await Promise.all(qrPaths.map(async (path) => {
-          if (/^https?:\/\//i.test(path)) return { path, url: path };
-          const { data, error } = await supabase.storage.from(PAYMENT_PROOF_BUCKET).createSignedUrl(path, 3600);
-          return { path, url: error ? "" : (data?.signedUrl || "") };
+          const url = await resolveStorageAssetUrl(path);
+          return { path, url };
         }));
         setPaymentQrPreviews(nextPreviews.filter((item) => item.url));
       } catch (err) {
@@ -3550,9 +3553,15 @@ function SettingsPage() {
     if (!file) return;
     setPaymentSettingsLoading(true);
     try {
-      const path = `settings/${crypto.randomUUID()}-${file.name.toLowerCase().replace(/[^a-z0-9._-]/g, "-")}`;
-      const { error: uploadError } = await supabase.storage.from(PAYMENT_PROOF_BUCKET).upload(path, file, { upsert: false, contentType: file.type });
+      const path = `payment-proofs/settings/${crypto.randomUUID()}-${file.name.toLowerCase().replace(/[^a-z0-9._-]/g, "-")}`;
+      const { error: uploadError } = await uploadStorageObject(path, file, {
+        contentType: file.type || undefined,
+        cacheControl: "31536000"
+      });
       if (uploadError) throw uploadError;
+      const { data: urlData, error: urlError } = await getStorageUrl(path);
+      const qrUrl = urlData?.publicUrl;
+      if (!qrUrl) throw new Error(`The QR code uploaded, but its Firebase Storage URL could not be resolved. ${urlError?.message || ""}`.trim());
       await logAdminAction({
         action: "payment_qr_uploaded",
         targetType: "app_setting",
@@ -3560,13 +3569,12 @@ function SettingsPage() {
         targetName: "GCash QR Code",
         details: { file_type: file.type || "image/unknown" }
       });
-      const { data } = await supabase.storage.from(PAYMENT_PROOF_BUCKET).createSignedUrl(path, 3600);
       setPaymentSettings((current) => {
         const currentPaths = Array.isArray(current.qr_image_urls) ? current.qr_image_urls : (current.qr_image_url ? [current.qr_image_url] : []);
-        const nextPaths = [...new Set([...currentPaths, path])];
+        const nextPaths = [...new Set([...currentPaths, qrUrl])];
         return { ...current, qr_image_urls: nextPaths, qr_image_url: nextPaths[0] || "" };
       });
-      if (data?.signedUrl) setPaymentQrPreviews((current) => [...current, { path, url: data.signedUrl }]);
+      setPaymentQrPreviews((current) => [...current, { path: qrUrl, url: qrUrl }]);
       showToast("QR code uploaded. Save payment settings to apply it.", "success");
     } catch (err) {
       await logAdminAction({

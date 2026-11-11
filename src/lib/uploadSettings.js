@@ -57,11 +57,22 @@ export function gameUploadSizeError(limit) {
 }
 
 export function describeGameStorageUploadError(error, limit) {
+  const code = String(error?.code || "");
   const message = error?.message || String(error || "Unknown Storage error.");
   const status = Number(error?.statusCode || error?.status);
-  if (/bucket not found/i.test(message)) {
+  if (code === "storage/unauthenticated" || /sign in to firebase storage/i.test(message)) {
     return new Error(
-      `The configured Supabase project could not access the game-assets bucket for this upload. Verify the project configuration, bucket name, and Storage permissions. Storage response: ${message}`
+      `Firebase Storage needs an authenticated admin session before it can accept this upload. Sign in again from the banner at the top of the admin. Storage response: ${message}`
+    );
+  }
+  if (code === "storage/unauthorized") {
+    return new Error(
+      `Firebase Storage denied this upload. Confirm the signed-in account has an admin role in the deployed Storage rules. Storage response: ${message}`
+    );
+  }
+  if (/bucket not found|bucket does not exist/i.test(message)) {
+    return new Error(
+      `The configured Firebase Storage bucket could not be reached. Verify VITE_FIREBASE_STORAGE_BUCKET and the deployed Storage rules. Storage response: ${message}`
     );
   }
   if (
@@ -69,7 +80,7 @@ export function describeGameStorageUploadError(error, limit) {
     || /entitytoolarge|payload too large|maximum.{0,20}size|file size limit/i.test(message)
   ) {
     return new Error(
-      `Supabase Storage rejected the file within the ${limit.maximumMb} MB Admin upload limit. Check the project's Storage file-size limit. Storage response: ${message}`
+      `Firebase Storage rejected the file within the ${limit.maximumMb} MB Admin upload limit. Check the bucket's file-size limits. Storage response: ${message}`
     );
   }
   return error;
