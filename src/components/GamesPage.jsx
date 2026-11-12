@@ -14,7 +14,8 @@ import {
   Trash2,
   Users,
   X,
-  ChevronUp
+  ChevronUp,
+  AlertTriangle
 } from "lucide-react";
 import { logAdminAction } from "../lib/adminAudit";
 import { getGameUserAccess, updateGameUserAccess } from "../lib/adminUsers";
