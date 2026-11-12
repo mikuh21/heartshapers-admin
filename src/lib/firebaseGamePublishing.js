@@ -184,7 +184,7 @@ export async function updateFirebasePdfGame(gameData, { coverFile = null, source
     if (sourcePdfFile.type !== "application/pdf" && !sourcePdfFile.name?.toLowerCase().endsWith(".pdf")) throw new Error("Choose a valid game content PDF.");
     const path = `games/${gameData.id}/source/${version}.pdf`;
     await uploadFirebaseAsset(path, sourcePdfFile, "application/pdf");
-    const processedSource = await processPdfAsset({ assetType: "game", assetId: gameData.id, sourcePath: path });
+    const processedSource = await processPdfAsset({ assetType: "game", assetId: gameData.id, sourcePath: path, expectedCurrentPath: existing.source_pdf_path || null });
     update.source_pdf_path = processedSource.data.path;
   }
   if (pageFiles !== null) {
