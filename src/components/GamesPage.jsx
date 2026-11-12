@@ -24,6 +24,7 @@ import { gameUploadSizeError, loadGameUploadLimit } from "../lib/uploadSettings"
 import { listFirebaseGamesWithCounts, loadFirebaseGameDetails, loadFirebaseGameAccess, updateFirebaseGameAccess, softDeleteFirebaseGame, updateFirebaseGameWithCover } from "../lib/firebaseGames";
 import { createFirebasePdfGame, downloadFirebasePdfGameSource, updateFirebasePdfGame } from "../lib/firebaseGamePublishing";
 import { uploadFirebaseAsset } from "../lib/firebaseAssetStorage";
+import { processFirebaseGameCover } from "../lib/gameCoverProcessing";
 import { updateFirebaseGameCover, updateFirebaseGameCardMetadata } from "../lib/firebaseGames";
 import { getFirebaseAssetDownloadUrl } from "../lib/firebaseAssetStorage";
 import { firestore } from "../lib/firebase";
@@ -48,33 +49,6 @@ async function loadGameCoverOptimizationState() {
 async function saveGameCoverOptimizationState(state) {
   await setAdminSetting(GAME_COVER_OPTIMIZATION_KEY, state);
 }
-async function optimizeExistingGameCover(url) {
-  if (!url || typeof createImageBitmap !== "function" || typeof document === "undefined") {
-    throw new Error("This browser does not support cover optimization.");
-  }
-  const response = await fetch(url);
-  if (!response.ok) throw new Error(`Unable to download cover (HTTP ${response.status}).`);
-  const sourceBlob = await response.blob();
-  if (!sourceBlob.type.startsWith("image/")) throw new Error("The cover URL did not return an image.");
-  let bitmap;
-  try {
-    bitmap = await createImageBitmap(sourceBlob);
-    const maxDimension = 900;
-    const scale = Math.min(1, maxDimension / Math.max(bitmap.width, bitmap.height));
-    const canvas = document.createElement("canvas");
-    canvas.width = Math.max(1, Math.round(bitmap.width * scale));
-    canvas.height = Math.max(1, Math.round(bitmap.height * scale));
-    const context = canvas.getContext("2d");
-    if (!context) throw new Error("Unable to initialize the image optimizer.");
-    context.drawImage(bitmap, 0, 0, canvas.width, canvas.height);
-    const blob = await new Promise((resolve) => canvas.toBlob(resolve, "image/webp", 0.70));
-    if (!blob) throw new Error("The browser could not encode the optimized cover.");
-    return blob.size < sourceBlob.size * 0.95 ? blob : null;
-  } finally {
-    bitmap?.close?.();
-  }
-}
-
 const PDF_CARD_IMAGE_OPTIMIZATION_KEY = "pdf_game_card_image_optimization_v1";
 
 async function loadPdfCardImageOptimizationState() {
@@ -872,17 +846,11 @@ export default function GamesPage({ canManageGames, ConfirmModal, showToast }) {
         let outcome = "failed";
         let uploadedPath = null;
         try {
-          const blob = await optimizeExistingGameCover(game.cover_display_url);
-          if (!blob) {
-            skippedCount += 1;
-            outcome = "skipped";
-          } else {
-            uploadedPath = `games/${game.id}/cover/optimized-${Date.now()}.webp`;
-            await uploadFirebaseAsset(uploadedPath, blob, "image/webp");
-            await updateFirebaseGameCover(game.id, game.cover_image_url, uploadedPath);
-            optimizedCount += 1;
-            outcome = "optimized";
-          }
+          const result = await processFirebaseGameCover(game.id, game.cover_image_url, game.cover_image_url);
+          uploadedPath = result.path;
+          await updateFirebaseGameCover(game.id, game.cover_image_url, uploadedPath);
+          optimizedCount += 1;
+          outcome = "optimized";
         } catch (error) {
           failures.push(`${game.title || game.id}: ${error?.message || "Unknown error"}`);
           // Keep uploaded files rather than risk deleting an object after an uncertain database update.
