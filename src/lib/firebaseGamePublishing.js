@@ -206,6 +206,7 @@ export async function updateFirebasePdfGame(gameData, { coverFile = null, source
   }
   if (pageFiles !== null) {
     if (!Array.isArray(pageFiles) || !pageFiles.length) throw new Error("Select at least one PDF page for the card deck.");
+    // A game becomes a PDF deck only when its existing card content is explicitly replaced.
     const cards = await uploadPdfPages(gameData.id, pageFiles, version);
     const existingCards = await getDocs(collection(firestore, "games", gameData.id, "game_cards"));
     const existingById = new Map(existingCards.docs.map((item) => [item.id, item]));
@@ -242,6 +243,7 @@ export async function updateFirebasePdfGame(gameData, { coverFile = null, source
     updated_at: serverTimestamp()
   });
   await rulesBatch.commit();
+  if (pageFiles !== null) update.game_type = "pdf_deck";
   await updateDoc(gameRef, update);
   return { ...existing, ...update, assetCleanupWarning: false };
 }
