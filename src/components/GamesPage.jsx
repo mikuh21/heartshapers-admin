@@ -1292,6 +1292,7 @@ export default function GamesPage({ canManageGames, ConfirmModal, showToast }) {
         <GameDetailsModal
           key={selectedGame.id}
           game={selectedGame}
+          ConfirmModal={ConfirmModal}
           gameUploadLimit={gameUploadLimit}
           uploadLimitError={uploadLimitError}
           onClose={() => setSelectedGame(null)}
@@ -2139,7 +2140,7 @@ function AddGameModal({
   );
 }
 
-function GameDetailsModal({ game, gameUploadLimit, uploadLimitError, onClose, onSaved, showToast }) {
+function GameDetailsModal({ game, gameUploadLimit, uploadLimitError, onClose, onSaved, showToast, ConfirmModal }) {
   const [details, setDetails] = useState({ rules: [], cards: [] });
   const [loadErrors, setLoadErrors] = useState({});
   const [loading, setLoading] = useState(true);
