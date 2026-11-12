@@ -9,7 +9,12 @@ import {
   serverTimestamp
 } from "firebase/firestore";
 import { getBlob, ref } from "firebase/storage";
+import { getFunctions, httpsCallable } from "firebase/functions";
+import { firebaseApp } from "./firebase";
 import { firestore, firebaseStorage } from "./firebase";
+
+const adminFunctions = getFunctions(firebaseApp, "asia-southeast1");
+const processPdfAsset = httpsCallable(adminFunctions, "processPdfAsset");
 import { uploadFirebaseAsset, getFirebaseAssetDownloadUrl } from "./firebaseAssetStorage";
 import { processFirebaseGameCover } from "./gameCoverProcessing";
 import {
@@ -112,6 +117,8 @@ export async function createFirebasePdfGame(gameData, coverFile, sourcePdfFile, 
   const sourcePath = `games/${gameData.id}/source/${version}.pdf`;
   try {
     await uploadFirebaseAsset(sourcePath, sourcePdfFile, "application/pdf");
+    const processedSource = await processPdfAsset({ assetType: "game", assetId: gameData.id, sourcePath });
+    const finalSourcePath = processedSource.data.path;
     const cards = await uploadPdfPages(gameData.id, pageFiles, version);
     await writeCollectionInChunks(["games", gameData.id, "game_cards"], cards);
     const rules = [{
@@ -132,7 +139,7 @@ export async function createFirebasePdfGame(gameData, coverFile, sourcePdfFile, 
       is_locked: gameData.is_locked,
       sort_order: Number(gameData.sort_order),
       cover_image_url: coverPath,
-      source_pdf_path: sourcePath,
+      source_pdf_path: finalSourcePath,
       created_at: serverTimestamp(),
       updated_at: serverTimestamp(),
       deleted_at: null
@@ -177,7 +184,8 @@ export async function updateFirebasePdfGame(gameData, { coverFile = null, source
     if (sourcePdfFile.type !== "application/pdf" && !sourcePdfFile.name?.toLowerCase().endsWith(".pdf")) throw new Error("Choose a valid game content PDF.");
     const path = `games/${gameData.id}/source/${version}.pdf`;
     await uploadFirebaseAsset(path, sourcePdfFile, "application/pdf");
-    update.source_pdf_path = path;
+    const processedSource = await processPdfAsset({ assetType: "game", assetId: gameData.id, sourcePath: path });
+    update.source_pdf_path = processedSource.data.path;
   }
   if (pageFiles !== null) {
     if (!Array.isArray(pageFiles) || !pageFiles.length) throw new Error("Select at least one PDF page for the card deck.");
