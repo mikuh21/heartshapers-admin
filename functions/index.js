@@ -439,6 +439,8 @@ exports.sendPaymentVerificationEmail = onCall({
 
 // Firebase Auth user and administrator management callables.
 Object.assign(exports, require("./userManagement"));
+// Server-side Sharp processing for game cover images only.
+Object.assign(exports, require("./gameCovers"));
 
 const SETTINGS_KEYS = new Set(["upload_settings", "payment_settings", "cover_optimization_v1", "game_cover_optimization_v1", "pdf_game_card_image_optimization_v1"]);
 exports.getAdminSetting = onCall({ region: "asia-southeast1" }, async (request) => {
