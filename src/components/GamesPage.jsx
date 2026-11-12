@@ -1200,8 +1200,7 @@ export default function GamesPage({ canManageGames, ConfirmModal, showToast }) {
                     <td className="games-actions-cell">
                       <div className="actions">
                         <button type="button" className="icon-btn" title="View / Edit" aria-label={`View or edit ${game.title}`} onClick={() => {
-                          if (game.game_type === "pdf_deck") setEditingPdfGame(game);
-                          else setSelectedGame(game);
+                          setEditingPdfGame(game);
                         }}>
                           <Pencil size={17} />
                         </button>
@@ -1541,13 +1540,16 @@ function AddGameModal({
     setLoadingExisting(true);
     Promise.all([
       loadFirebaseGameDetails(game.id),
-      downloadFirebasePdfGameSource(game.id, game.source_pdf_path)
+      game.source_pdf_path
+        ? downloadFirebasePdfGameSource(game.id, game.source_pdf_path)
+        : Promise.resolve(null)
     ]).then(async ([result, sourceBlob]) => {
       if (!active) return;
       if (result.rules.error) throw result.rules.error;
       if (result.cards.error) throw result.cards.error;
       const ruleText = result.rules.data[0]?.rule_text || "";
       setForm((current) => ({ ...current, rules: ruleText }));
+      if (!sourceBlob) return;
       const orderedCards = [...result.cards.data].sort((left, right) => (
         (left.metadata?.page_order || left.sort_order) - (right.metadata?.page_order || right.sort_order)
       ));
@@ -1557,12 +1559,12 @@ function AddGameModal({
       if (loaded && savedPageNumbers.some((pageNumber) => !Number.isInteger(pageNumber))) {
         setErrors((current) => ({
           ...current,
-          pages: "Some saved cards do not contain valid PDF page metadata. Existing images are preserved unless you explicitly replace them."
+          pages: "Some saved cards do not contain valid PDF page metadata. Existing card content is preserved unless you explicitly replace it."
         }));
       }
     }).catch((loadError) => {
       if (active) {
-        console.error("PDF game editor content could not be loaded.", {
+        console.error("Game editor content could not be loaded.", {
           gameId: game.id,
           message: loadError?.message
         });
@@ -1579,7 +1581,6 @@ function AddGameModal({
       active = false;
     };
   }, [game?.id]);
-
   function clearPdfPreview() {
     pdfLoadIdRef.current += 1;
     setPdfLoading(false);
