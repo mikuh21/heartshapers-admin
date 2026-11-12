@@ -1763,7 +1763,7 @@ function BookModal({ book, onClose, onSaved }) {
     const uploaded = await uploadFirebaseAsset(firebasePath, uploadFile, uploadFile.type || (isCover ? "image/webp" : "application/pdf"));
     let path = uploaded.path;
     if (!isCover) {
-      const { data } = await httpsCallable(adminFunctions, "processPdfAsset")({ assetType: "book", assetId, sourcePath: path });
+      const { data } = await httpsCallable(adminFunctions, "processPdfAsset")({ assetType: "book", assetId, sourcePath: path, expectedCurrentPath: form.id ? (form.pdf_url || null) : null });
       path = data.path;
     }
 
