@@ -10,7 +10,8 @@ import {
   serverTimestamp
 } from "firebase/firestore";
 import { firestore } from "./firebase";
-import { getFirebaseAssetDownloadUrl, uploadFirebaseAsset } from "./firebaseAssetStorage";
+import { getFirebaseAssetDownloadUrl } from "./firebaseAssetStorage";
+import { processFirebaseGameCover } from "./gameCoverProcessing";
 
 /**
  * Firebase-first Games catalog reads. Collection IDs and document IDs intentionally
@@ -156,10 +157,7 @@ export async function updateFirebaseGameWithCover(gameId, isLocked, changes = {}
   }
   let coverDisplayUrl = null;
   if (coverFile) {
-    const extension = { "image/jpeg": "jpg", "image/png": "png", "image/webp": "webp" }[coverFile.type];
-    if (!extension) throw new Error("Choose a JPEG, PNG, or WebP cover image.");
-    const path = `games/${gameId}/cover/${crypto.randomUUID()}.${extension}`;
-    const uploaded = await uploadFirebaseAsset(path, coverFile, coverFile.type);
+    const uploaded = await processFirebaseGameCover(gameId, coverFile);
     update.cover_image_url = uploaded.path;
     coverDisplayUrl = uploaded.downloadUrl;
   }
