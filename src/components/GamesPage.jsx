@@ -2054,22 +2054,7 @@ function AddGameModal({
           </div>
         </ConfirmingForm>
       </div>
-      {pendingAccessChange && ConfirmModal && (
-        <ConfirmModal
-          title="Change Game Access?"
-          message={"Confirm changing " + (pendingAccessChange.user.full_name || pendingAccessChange.user.email || "this user") + "'s access for \"" + game.title + "\" from " + pendingAccessChange.previousStatus + " to " + (pendingAccessChange.nextStatus === "free" ? "Free" : "Locked") + "."}
-          actionLabel="Confirm Change"
-          busyLabel="Updating..."
-          tone="primary"
-          onClose={() => setPendingAccessChange(null)}
-          onConfirm={async () => {
-            const { user, nextStatus } = pendingAccessChange;
-            const succeeded = await changeUserAccess(user, nextStatus);
-            if (succeeded) setPendingAccessChange(null);
-            return succeeded;
-          }}
-        />
-      )}
+}
     </div>
   );
 }
