@@ -1,0 +1,17 @@
+[
+  {
+    "origin": [
+      "https://app.heartshapers.asia"
+    ],
+    "method": [
+      "GET",
+      "HEAD"
+    ],
+    "responseHeader": [
+      "Content-Type",
+      "Content-Length",
+      "Cache-Control"
+    ],
+    "maxAgeSeconds": 3600
+  }
+]
