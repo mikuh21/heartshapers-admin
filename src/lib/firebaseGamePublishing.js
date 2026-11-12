@@ -11,6 +11,7 @@ import {
 import { getBlob, ref } from "firebase/storage";
 import { firestore, firebaseStorage } from "./firebase";
 import { uploadFirebaseAsset, getFirebaseAssetDownloadUrl } from "./firebaseAssetStorage";
+import { processFirebaseGameCover } from "./gameCoverProcessing";
 import {
   gameUploadSizeError,
   loadGameUploadLimit
@@ -18,29 +19,6 @@ import {
 
 function coverExtension(file) {
   return { "image/jpeg": "jpg", "image/png": "png", "image/webp": "webp" }[file?.type];
-}
-
-async function optimizeCover(file) {
-  if (!file || typeof createImageBitmap !== "function" || typeof document === "undefined") return file;
-  let bitmap;
-  try {
-    bitmap = await createImageBitmap(file);
-    const scale = Math.min(1, 1200 / Math.max(bitmap.width, bitmap.height));
-    if (scale === 1 && file.size <= 350 * 1024) return file;
-    const canvas = document.createElement("canvas");
-    canvas.width = Math.max(1, Math.round(bitmap.width * scale));
-    canvas.height = Math.max(1, Math.round(bitmap.height * scale));
-    const context = canvas.getContext("2d");
-    if (!context) return file;
-    context.drawImage(bitmap, 0, 0, canvas.width, canvas.height);
-    const blob = await new Promise((resolve) => canvas.toBlob(resolve, "image/webp", 0.78));
-    if (!blob || blob.size >= file.size) return file;
-    return new File([blob], "cover.webp", { type: "image/webp", lastModified: Date.now() });
-  } catch {
-    return file;
-  } finally {
-    bitmap?.close?.();
-  }
 }
 
 async function optimizePage(blob) {
@@ -129,11 +107,10 @@ export async function createFirebasePdfGame(gameData, coverFile, sourcePdfFile, 
   if ((await getDoc(gameRef)).exists()) throw new Error("A game with this ID already exists.");
 
   const version = crypto.randomUUID();
-  const cover = await optimizeCover(coverFile);
-  const coverPath = `games/${gameData.id}/cover/${version}.${coverExtension(cover)}`;
+  const cover = await processFirebaseGameCover(gameData.id, coverFile);
+  const coverPath = cover.path;
   const sourcePath = `games/${gameData.id}/source/${version}.pdf`;
   try {
-    await uploadFirebaseAsset(coverPath, cover, cover.type);
     await uploadFirebaseAsset(sourcePath, sourcePdfFile, "application/pdf");
     const cards = await uploadPdfPages(gameData.id, pageFiles, version);
     await writeCollectionInChunks(["games", gameData.id, "game_cards"], cards);
@@ -193,10 +170,8 @@ export async function updateFirebasePdfGame(gameData, { coverFile = null, source
   const version = crypto.randomUUID();
   if (coverFile) {
     if (!coverExtension(coverFile)) throw new Error("Choose a JPEG, PNG, or WebP cover image.");
-    const optimized = await optimizeCover(coverFile);
-    const path = `games/${gameData.id}/cover/${version}.${coverExtension(optimized)}`;
-    await uploadFirebaseAsset(path, optimized, optimized.type);
-    update.cover_image_url = path;
+    const optimized = await processFirebaseGameCover(gameData.id, coverFile);
+    update.cover_image_url = optimized.path;
   }
   if (sourcePdfFile) {
     if (sourcePdfFile.type !== "application/pdf" && !sourcePdfFile.name?.toLowerCase().endsWith(".pdf")) throw new Error("Choose a valid game content PDF.");
