@@ -37,17 +37,6 @@ exports.processPdfAsset = onCall({
     throw new HttpsError("invalid-argument", "Invalid PDF asset details.");
   }
 
-  const db = getFirestore();
-  const docRef = db.collection(assetType === "book" ? "books" : "games").doc(assetId);
-  const snapshot = await docRef.get();
-  if (snapshot.exists) {
-    const row = snapshot.data();
-    const currentPath = assetType === "book" ? row.pdf_url : row.source_pdf_path;
-    if (row.deleted_at || currentPath !== sourcePath) {
-      throw new HttpsError("failed-precondition", "The PDF reference changed before optimization. The active file was not changed.");
-    }
-  }
-
   const workerUrl = String(process.env.PDF_WORKER_URL || "").replace(/\/$/, "");
   if (!workerUrl) throw new HttpsError("failed-precondition", "PDF_WORKER_URL is not configured for this function.");
   try {
