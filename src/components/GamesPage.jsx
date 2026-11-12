@@ -2054,7 +2054,6 @@ function AddGameModal({
           </div>
         </ConfirmingForm>
       </div>
-}
     </div>
   );
 }
