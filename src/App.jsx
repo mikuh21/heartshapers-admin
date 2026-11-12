@@ -1753,7 +1753,7 @@ function BookModal({ book, onClose, onSaved }) {
     return unique;
   }
 
-  async function uploadFile(file, bucket, folder) {
+  async function uploadFile(file, bucket, folder, assetId) {
     if (!file) return null;
 
     const isCover = folder === "covers";
@@ -1761,7 +1761,11 @@ function BookModal({ book, onClose, onSaved }) {
     const safeName = uploadFile.name.toLowerCase().replace(/[^a-z0-9._-]/g, "-");
     const firebasePath = `${folder}/${crypto.randomUUID()}-${safeName}`;
     const uploaded = await uploadFirebaseAsset(firebasePath, uploadFile, uploadFile.type || (isCover ? "image/webp" : "application/pdf"));
-    const path = uploaded.path;
+    let path = uploaded.path;
+    if (!isCover) {
+      const { data } = await httpsCallable(adminFunctions, "processPdfAsset")({ assetType: "book", assetId, sourcePath: path });
+      path = data.path;
+    }
 
     await logAdminAction({
       action: isCover ? "book_cover_uploaded" : "book_pdf_uploaded",
@@ -1818,15 +1822,16 @@ function BookModal({ book, onClose, onSaved }) {
     setBusy(true);
 
     try {
+      const bookId = form.id || crypto.randomUUID();
       let coverUrl = form.cover_image_url || null;
       let pdfUrl = form.pdf_url || null;
 
       if (coverFile) {
-        coverUrl = await uploadFile(coverFile, COVER_BUCKET, "covers");
+        coverUrl = await uploadFile(coverFile, COVER_BUCKET, "covers", bookId);
       }
 
       if (pdfFile) {
-        pdfUrl = await uploadFile(pdfFile, PDF_BUCKET, "pdfs");
+        pdfUrl = await uploadFile(pdfFile, PDF_BUCKET, "pdfs", bookId);
       }
 
       const payload = {
@@ -1877,7 +1882,6 @@ function BookModal({ book, onClose, onSaved }) {
         return;
       }
 
-      const bookId = crypto.randomUUID();
       const bookRef = doc(firestore, "books", bookId);
       result = { data: { id: bookId, ...payload } };
       await setDoc(bookRef, { ...payload, created_at: serverTimestamp(), updated_at: serverTimestamp(), deleted_at: null });
