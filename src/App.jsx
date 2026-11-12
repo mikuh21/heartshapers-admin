@@ -587,30 +587,20 @@ function ConfirmModal({ title, message, secondaryMessage, actionLabel, busyLabel
   const dialogRef = useRef(null);
 
   useEffect(() => {
-    const scrollY = window.scrollY;
     const bodyStyle = document.body.style;
-    const originalBodyStyles = {
-      overflow: bodyStyle.overflow,
-      paddingRight: bodyStyle.paddingRight,
-      position: bodyStyle.position,
-      top: bodyStyle.top,
-      width: bodyStyle.width
-    };
+    const originalOverflow = bodyStyle.overflow;
+    const originalPaddingRight = bodyStyle.paddingRight;
     const scrollbarWidth = window.innerWidth - document.documentElement.clientWidth;
 
+    // Lock background scrolling without fixing the body. Fixing body position
+    // can leave the entire admin page stuck at its previous scroll position
+    // when modal effects overlap or are cleaned up in a different order.
     bodyStyle.overflow = "hidden";
-    bodyStyle.position = "fixed";
-    bodyStyle.top = `-${scrollY}px`;
-    bodyStyle.width = "100%";
     if (scrollbarWidth > 0) bodyStyle.paddingRight = `${scrollbarWidth}px`;
 
     return () => {
-      bodyStyle.overflow = originalBodyStyles.overflow;
-      bodyStyle.paddingRight = originalBodyStyles.paddingRight;
-      bodyStyle.position = originalBodyStyles.position;
-      bodyStyle.top = originalBodyStyles.top;
-      bodyStyle.width = originalBodyStyles.width;
-      window.scrollTo(0, scrollY);
+      bodyStyle.overflow = originalOverflow;
+      bodyStyle.paddingRight = originalPaddingRight;
     };
   }, []);
 
@@ -1648,30 +1638,20 @@ function BookUserAccessModal({ book, onClose }) {
   const accessRequestRef = useRef(null);
 
   useEffect(() => {
-    const scrollY = window.scrollY;
     const bodyStyle = document.body.style;
-    const originalBodyStyles = {
-      overflow: bodyStyle.overflow,
-      paddingRight: bodyStyle.paddingRight,
-      position: bodyStyle.position,
-      top: bodyStyle.top,
-      width: bodyStyle.width
-    };
+    const originalOverflow = bodyStyle.overflow;
+    const originalPaddingRight = bodyStyle.paddingRight;
     const scrollbarWidth = window.innerWidth - document.documentElement.clientWidth;
 
+    // Lock background scrolling without fixing the body. Fixing body position
+    // can leave the entire admin page stuck at its previous scroll position
+    // when modal effects overlap or are cleaned up in a different order.
     bodyStyle.overflow = "hidden";
-    bodyStyle.position = "fixed";
-    bodyStyle.top = `-${scrollY}px`;
-    bodyStyle.width = "100%";
     if (scrollbarWidth > 0) bodyStyle.paddingRight = `${scrollbarWidth}px`;
 
     return () => {
-      bodyStyle.overflow = originalBodyStyles.overflow;
-      bodyStyle.paddingRight = originalBodyStyles.paddingRight;
-      bodyStyle.position = originalBodyStyles.position;
-      bodyStyle.top = originalBodyStyles.top;
-      bodyStyle.width = originalBodyStyles.width;
-      window.scrollTo(0, scrollY);
+      bodyStyle.overflow = originalOverflow;
+      bodyStyle.paddingRight = originalPaddingRight;
     };
   }, []);
 
@@ -1918,30 +1898,20 @@ function BookModal({ book, onClose, onSaved }) {
   }, [form.pillar, form.subcategory, allowedCategories, managedSettingsLoaded]);
 
   useEffect(() => {
-    const scrollY = window.scrollY;
     const bodyStyle = document.body.style;
-    const originalBodyStyles = {
-      overflow: bodyStyle.overflow,
-      paddingRight: bodyStyle.paddingRight,
-      position: bodyStyle.position,
-      top: bodyStyle.top,
-      width: bodyStyle.width
-    };
+    const originalOverflow = bodyStyle.overflow;
+    const originalPaddingRight = bodyStyle.paddingRight;
     const scrollbarWidth = window.innerWidth - document.documentElement.clientWidth;
 
+    // Lock background scrolling without fixing the body. Fixing body position
+    // can leave the entire admin page stuck at its previous scroll position
+    // when modal effects overlap or are cleaned up in a different order.
     bodyStyle.overflow = "hidden";
-    bodyStyle.position = "fixed";
-    bodyStyle.top = `-${scrollY}px`;
-    bodyStyle.width = "100%";
     if (scrollbarWidth > 0) bodyStyle.paddingRight = `${scrollbarWidth}px`;
 
     return () => {
-      bodyStyle.overflow = originalBodyStyles.overflow;
-      bodyStyle.paddingRight = originalBodyStyles.paddingRight;
-      bodyStyle.position = originalBodyStyles.position;
-      bodyStyle.top = originalBodyStyles.top;
-      bodyStyle.width = originalBodyStyles.width;
-      window.scrollTo(0, scrollY);
+      bodyStyle.overflow = originalOverflow;
+      bodyStyle.paddingRight = originalPaddingRight;
     };
   }, []);
 
