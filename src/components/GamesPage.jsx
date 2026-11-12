@@ -1237,6 +1237,7 @@ export default function GamesPage({ canManageGames, ConfirmModal, showToast }) {
       )}
       {addGameOpen && (
         <AddGameModal
+          ConfirmModal={ConfirmModal}
           existingGames={games}
           gameUploadLimit={gameUploadLimit}
           uploadLimitError={uploadLimitError}
@@ -1275,6 +1276,7 @@ export default function GamesPage({ canManageGames, ConfirmModal, showToast }) {
       )}
       {editingPdfGame && (
         <AddGameModal
+          ConfirmModal={ConfirmModal}
           key={editingPdfGame.id}
           game={editingPdfGame}
           existingGames={games}
@@ -1492,7 +1494,8 @@ function AddGameModal({
   onClose,
   onCreated,
   onSaved,
-  showToast
+  showToast,
+  ConfirmModal
 }) {
   const isEditing = Boolean(game);
   const [form, setForm] = useState(() => ({
