@@ -33,6 +33,7 @@ import {
 import { getFunctions, httpsCallable } from "firebase/functions";
 import { ref as firebaseStorageRef, getDownloadURL } from "firebase/storage";
 import { firebaseApp, firebaseAuth, firebaseStorage, firestore } from "./lib/firebase";
+import { lockBodyScroll } from "./lib/bodyScrollLock";
 const adminFunctions = getFunctions(firebaseApp, "asia-southeast1");
 const getAdminSetting = async (key) => (await httpsCallable(adminFunctions, "getAdminSetting")({ key })).data;
 const setAdminSetting = async (key, value) => (await httpsCallable(adminFunctions, "setAdminSetting")({ key, value })).data;
@@ -439,33 +440,7 @@ function ConfirmModal({ title, message, secondaryMessage, actionLabel, busyLabel
   const [error, setError] = useState("");
   const dialogRef = useRef(null);
 
-  useEffect(() => {
-    const scrollY = window.scrollY;
-    const bodyStyle = document.body.style;
-    const originalBodyStyles = {
-      overflow: bodyStyle.overflow,
-      paddingRight: bodyStyle.paddingRight,
-      position: bodyStyle.position,
-      top: bodyStyle.top,
-      width: bodyStyle.width
-    };
-    const scrollbarWidth = window.innerWidth - document.documentElement.clientWidth;
-
-    bodyStyle.overflow = "hidden";
-    bodyStyle.position = "fixed";
-    bodyStyle.top = `-${scrollY}px`;
-    bodyStyle.width = "100%";
-    if (scrollbarWidth > 0) bodyStyle.paddingRight = `${scrollbarWidth}px`;
-
-    return () => {
-      bodyStyle.overflow = originalBodyStyles.overflow;
-      bodyStyle.paddingRight = originalBodyStyles.paddingRight;
-      bodyStyle.position = originalBodyStyles.position;
-      bodyStyle.top = originalBodyStyles.top;
-      bodyStyle.width = originalBodyStyles.width;
-      window.scrollTo(0, scrollY);
-    };
-  }, []);
+  useEffect(() => lockBodyScroll(), []);
 
   useEffect(() => {
     const previousActiveElement = document.activeElement;
@@ -1167,12 +1142,12 @@ function Books() {
         };
         try {
           await saveCoverOptimizationState(reconciledState);
-          showToast(`Cover optimization tracker reconciled: ${optimizedBooks.length} existing optimized covers. No files were changed.`, "success");
+          console.info(`Cover optimization tracker reconciled: ${optimizedBooks.length} existing optimized covers. No files were changed.`);
         } catch (reconcileError) {
           showToast(reconcileError?.message || "Unable to reconcile the cover optimization tracker.", "error");
         }
       } else {
-        showToast("No unprocessed book covers need optimization.", "info");
+        console.info("No unprocessed book covers need optimization.");
       }
       return true;
     }
@@ -1490,33 +1465,7 @@ function BookUserAccessModal({ book, onClose }) {
   const [loadError, setLoadError] = useState(false);
   const accessRequestRef = useRef(null);
 
-  useEffect(() => {
-    const scrollY = window.scrollY;
-    const bodyStyle = document.body.style;
-    const originalBodyStyles = {
-      overflow: bodyStyle.overflow,
-      paddingRight: bodyStyle.paddingRight,
-      position: bodyStyle.position,
-      top: bodyStyle.top,
-      width: bodyStyle.width
-    };
-    const scrollbarWidth = window.innerWidth - document.documentElement.clientWidth;
-
-    bodyStyle.overflow = "hidden";
-    bodyStyle.position = "fixed";
-    bodyStyle.top = `-${scrollY}px`;
-    bodyStyle.width = "100%";
-    if (scrollbarWidth > 0) bodyStyle.paddingRight = `${scrollbarWidth}px`;
-
-    return () => {
-      bodyStyle.overflow = originalBodyStyles.overflow;
-      bodyStyle.paddingRight = originalBodyStyles.paddingRight;
-      bodyStyle.position = originalBodyStyles.position;
-      bodyStyle.top = originalBodyStyles.top;
-      bodyStyle.width = originalBodyStyles.width;
-      window.scrollTo(0, scrollY);
-    };
-  }, []);
+  useEffect(() => lockBodyScroll(), []);
 
   useEffect(() => {
     let active = true;
@@ -1760,33 +1709,7 @@ function BookModal({ book, onClose, onSaved }) {
     }
   }, [form.pillar, form.subcategory, allowedCategories, managedSettingsLoaded]);
 
-  useEffect(() => {
-    const scrollY = window.scrollY;
-    const bodyStyle = document.body.style;
-    const originalBodyStyles = {
-      overflow: bodyStyle.overflow,
-      paddingRight: bodyStyle.paddingRight,
-      position: bodyStyle.position,
-      top: bodyStyle.top,
-      width: bodyStyle.width
-    };
-    const scrollbarWidth = window.innerWidth - document.documentElement.clientWidth;
-
-    bodyStyle.overflow = "hidden";
-    bodyStyle.position = "fixed";
-    bodyStyle.top = `-${scrollY}px`;
-    bodyStyle.width = "100%";
-    if (scrollbarWidth > 0) bodyStyle.paddingRight = `${scrollbarWidth}px`;
-
-    return () => {
-      bodyStyle.overflow = originalBodyStyles.overflow;
-      bodyStyle.paddingRight = originalBodyStyles.paddingRight;
-      bodyStyle.position = originalBodyStyles.position;
-      bodyStyle.top = originalBodyStyles.top;
-      bodyStyle.width = originalBodyStyles.width;
-      window.scrollTo(0, scrollY);
-    };
-  }, []);
+  useEffect(() => lockBodyScroll(), []);
 
   function update(field, value) {
     setForm((current) => ({ ...current, [field]: value }));

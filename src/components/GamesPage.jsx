@@ -933,10 +933,9 @@ export default function GamesPage({ canManageGames, ConfirmModal, showToast }) {
         details: { candidates: candidates.length, optimized: optimizedCount, skipped: skippedCount, failed: failures.length }
       });
       if (failures.length) {
-        console.error("Some game covers could not be optimized:", failures);
-        showToast(`Game cover optimization finished: ${optimizedCount} optimized, ${skippedCount} skipped, ${failures.length} failed. See console for failed titles.`, "warning");
+        console.error("Game cover optimization finished:", { optimized: optimizedCount, skipped: skippedCount, failed: failures.length, failures });
       } else {
-        showToast(`Game cover optimization finished: ${optimizedCount} optimized, ${skippedCount} skipped.`, "success");
+        console.info("Game cover optimization finished:", { optimized: optimizedCount, skipped: skippedCount });
       }
       if (active) {
         setGameCoverOptimizationProgress(null);
@@ -1065,10 +1064,9 @@ export default function GamesPage({ canManageGames, ConfirmModal, showToast }) {
       catch (saveError) { console.error("Unable to save final PDF card image optimization status.", saveError); }
 
       if (failures.length) {
-        console.error("Some PDF game card images could not be optimized:", failures);
-        showToast(`PDF card image optimization finished: ${optimizedCount} optimized, ${skippedCount} skipped, ${failures.length} failed. See console for details.`, "warning");
+        console.error("PDF card image optimization finished:", { optimized: optimizedCount, skipped: skippedCount, failed: failures.length, failures });
       } else {
-        showToast(`PDF card image optimization finished: ${optimizedCount} optimized, ${skippedCount} skipped.`, "success");
+        console.info("PDF card image optimization finished:", { optimized: optimizedCount, skipped: skippedCount });
       }
       if (active) {
         setPdfCardImageOptimizationProgress(null);
