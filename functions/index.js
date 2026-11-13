@@ -264,7 +264,7 @@ exports.submitCartPayment = onCall({ region: "asia-southeast1", secrets: [SMTP_H
     return {
       submitted: true,
       items: writes.length,
-      emailItems: writes.map(({ item, cents }) => ({ type: item.type, id: item.id, amount: cents / 100, name: item.catalog.title || item.catalog.name || "Content" })),
+      emailItems: writes.map(({ item, cents, catalog }) => ({ type: item.type, id: item.id, amount: cents / 100, name: catalog.title || catalog.name || "Content" })),
       total: total / 100,
     };
   });
