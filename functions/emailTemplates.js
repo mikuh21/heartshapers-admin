@@ -75,16 +75,62 @@ function passwordResetEmail({ email, code }) {
   };
 }
 
-function paymentReceiptEmail({ name, referenceNumber }) {
+function paymentStatusEmail({ name, referenceNumber, status, items = [], total = 0, rejectionReason = "" }) {
+  const normalizedStatus = ["pending", "verified", "rejected"].includes(status) ? status : "pending";
+  const copy = {
+    pending: {
+      subject: "Heartshapers payment received",
+      heading: "Payment submitted",
+      subtitle: "We have received your payment details and will review them shortly.",
+      intro: "Your payment transaction has been submitted successfully. Please wait for confirmation.",
+      footer: "We will email you again when your payment has been reviewed.",
+    },
+    verified: {
+      subject: "Your Heartshapers payment is confirmed",
+      heading: "Payment confirmed",
+      subtitle: "Thank you for your purchase and for supporting Heartshapers.",
+      intro: "Your payment has been successfully verified. Your purchased content is now available in your account.",
+      footer: "You can open the Heartshapers app and access your purchased content anytime.",
+    },
+    rejected: {
+      subject: "Update on your Heartshapers payment",
+      heading: "Payment needs attention",
+      subtitle: "Your payment submission was not approved.",
+      intro: "We were unable to verify this payment. Please review the reason below and contact the Heartshapers team if you need help.",
+      footer: "You can review your rejected transaction in the Heartshapers app and submit a corrected payment.",
+    },
+  }[normalizedStatus];
+
+  const itemRows = items.map((item) => {
+    const label = `${item.type === "game" ? "Game" : "Book"} · ${item.name || "Content"}`;
+    const amount = Number(item.amount || 0);
+    return `<tr>
+<td style="padding:12px 10px;border-bottom:1px solid #eeeeee;font-size:14px;line-height:1.5;color:#444444;">${escapeHtml(label)}</td>
+<td align="right" style="padding:12px 10px;border-bottom:1px solid #eeeeee;font-size:14px;line-height:1.5;color:#252525;font-weight:bold;white-space:nowrap;">₱${amount.toLocaleString("en-PH", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</td>
+</tr>`;
+  }).join("");
+  const itemTable = `<div style="margin-top:20px;border:1px solid #eeeeee;border-radius:10px;overflow:hidden;">
+<table role="presentation" width="100%" cellspacing="0" cellpadding="0" border="0">
+<tr><td colspan="2" style="padding:13px 10px;background:#fafafa;font-size:12px;font-weight:bold;letter-spacing:1px;text-transform:uppercase;color:#777777;">Transaction items</td></tr>
+${itemRows || '<tr><td colspan="2" style="padding:12px 10px;color:#777777;">Item details unavailable</td></tr>'}
+<tr><td style="padding:14px 10px;font-size:14px;font-weight:bold;color:#252525;">Total</td>
+<td align="right" style="padding:14px 10px;font-size:17px;font-weight:bold;color:#d92d20;white-space:nowrap;">₱${Number(total || 0).toLocaleString("en-PH", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</td></tr>
+</table></div>`;
+  const rejectionPanel = normalizedStatus === "rejected" && rejectionReason
+    ? `<div style="margin-top:18px;padding:14px 16px;border-radius:9px;background:#fff5f4;border:1px solid #ffe0dd;color:#8f241d;font-size:13px;line-height:1.65;"><strong>Reason:</strong><br>${escapeHtml(rejectionReason)}</div>`
+    : "";
   const body = `<p style="font-size:15px;line-height:1.7;color:#444444;margin:0 0 12px;">Hello ${escapeHtml(name || "there")},</p>
-<p style="font-size:15px;line-height:1.7;color:#555555;margin:0 0 12px;">Your payment has been successfully verified. Your purchased Heartshapers content is now available in your account.</p>
+<p style="font-size:15px;line-height:1.7;color:#555555;margin:0 0 12px;">${copy.intro}</p>
 ${detailPanel("Payment reference", referenceNumber)}
-<div style="margin-top:18px;padding:14px 16px;border-radius:9px;background:#f7f7f8;border:1px solid #e9e9e9;color:#666666;font-size:13px;line-height:1.65;">You can open the Heartshapers app and browse your purchased content anytime.</div>`;
+${itemTable}
+${rejectionPanel}
+<div style="margin-top:18px;padding:14px 16px;border-radius:9px;background:#f7f7f8;border:1px solid #e9e9e9;color:#666666;font-size:13px;line-height:1.65;">${copy.footer}</div>`;
+  const textItems = items.map((item) => `- ${item.type === "game" ? "Game" : "Book"}: ${item.name || "Content"} — PHP ${Number(item.amount || 0).toFixed(2)}`).join("\\n");
   return {
-    subject: "Your Heartshapers payment receipt",
-    html: shell({ preheader: "Your payment has been verified and your purchased content is available.", heading: "Payment confirmed", subtitle: "Thank you for your purchase and for supporting Heartshapers.", body, footerNote: "Keep this email for your records. If you have questions about this payment, please contact the Heartshapers team and include your payment reference." }),
-    text: `Hello ${name || "there"},\n\nYour payment has been successfully verified. Your purchased Heartshapers content is now available in your account.\n\nPayment reference: ${referenceNumber}\n\nThank you for supporting Heartshapers.`,
+    subject: copy.subject,
+    html: shell({ preheader: copy.intro, heading: copy.heading, subtitle: copy.subtitle, body, footerNote: "Keep this email for your records. If you contact the Heartshapers team, include your payment reference." }),
+    text: `Hello ${name || "there"},\\n\\n${copy.intro}\\n\\nPayment reference: ${referenceNumber}\\n\\nItems:\\n${textItems}\\n\\nTotal: PHP ${Number(total || 0).toFixed(2)}${normalizedStatus === "rejected" && rejectionReason ? `\\n\\nReason: ${rejectionReason}` : ""}\\n\\n${copy.footer}`,
   };
 }
 
-module.exports = { verificationEmail, passwordResetEmail, paymentReceiptEmail };
+module.exports = { verificationEmail, passwordResetEmail, paymentStatusEmail };
