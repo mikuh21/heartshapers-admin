@@ -129,7 +129,7 @@ ${rejectionPanel}
   return {
     subject: copy.subject,
     html: shell({ preheader: copy.intro, heading: copy.heading, subtitle: copy.subtitle, body, footerNote: "Keep this email for your records. If you contact the Heartshapers team, include your payment reference." }),
-    text: `Hello ${name || "there"},\\n\\n${copy.intro}\\n\\nPayment reference: ${referenceNumber}\\n\\nItems:\\n${textItems}\\n\\nTotal: PHP ${Number(total || 0).toFixed(2)}${normalizedStatus === "rejected" && rejectionReason ? `\\n\\nReason: ${rejectionReason}` : ""}\\n\\n${copy.footer}`,
+    text: `Hello ${name || "there"},\n\n${copy.intro}\n\nPayment reference: ${referenceNumber}\n\nItems:\n${textItems}\n\nTotal: PHP ${Number(total || 0).toFixed(2)}${normalizedStatus === "rejected" && rejectionReason ? `\n\nReason: ${rejectionReason}` : ""}\n\n${copy.footer}`,
   };
 }
 
