@@ -2,6 +2,7 @@ const { onCall, HttpsError } = require("firebase-functions/v2/https");
 const { getAuth } = require("firebase-admin/auth");
 const { getFirestore, FieldValue } = require("firebase-admin/firestore");
 const { defineSecret } = require("firebase-functions/params");
+const { verificationEmail } = require("./emailTemplates");
 
 const REGION = "asia-southeast1";
 const db = getFirestore();
@@ -62,21 +63,27 @@ async function listAllUsers() {
 async function sendVerificationEmail(user) {
   const link = await getAuth().generateEmailVerificationLink(user.email, {
     url: VERIFY_CONTINUE_URL.value(),
-    handleCodeInApp: false
+    handleCodeInApp: false,
   });
   const nodemailer = require("nodemailer");
+  const port = Number(SMTP_PORT.value() || 587);
   const transport = nodemailer.createTransport({
     host: SMTP_HOST.value(),
-    port: Number(SMTP_PORT.value() || 587),
-    secure: Number(SMTP_PORT.value() || 587) === 465,
-    auth: { user: SMTP_USER.value(), pass: SMTP_PASSWORD.value() }
+    port,
+    secure: port === 465,
+    auth: { user: SMTP_USER.value(), pass: SMTP_PASSWORD.value() },
+  });
+  const email = verificationEmail({
+    name: user.displayName || user.customClaims?.full_name || "",
+    email: user.email,
+    link,
   });
   await transport.sendMail({
     from: SMTP_FROM.value(),
     to: user.email,
-    subject: "Verify your HEARTSHAPERS account",
-    text: `Hello ${user.displayName || "there"},\n\nPlease verify your HEARTSHAPERS account using this link:\n${link}\n\nIf you did not request this account, you can ignore this email.`,
-    html: `<p>Hello ${user.displayName || "there"},</p><p>Please verify your HEARTSHAPERS account:</p><p><a href="${link}">Verify email address</a></p><p>If you did not request this account, you can ignore this email.</p>`
+    subject: email.subject,
+    text: email.text,
+    html: email.html,
   });
 }
 
