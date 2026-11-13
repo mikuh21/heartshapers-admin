@@ -68,12 +68,34 @@ exports.reviewCartPayment = onCall({ region: "asia-southeast1" }, async (request
 
     const reviewedAt = new Date().toISOString();
     for (const item of pending) {
+      const nextStatus = action === "verify" ? "verified" : "rejected";
       tx.update(item.ref, {
-        status: action === "verify" ? "verified" : "rejected",
+        status: nextStatus,
         admin_id: adminId,
         reviewed_at: reviewedAt,
         admin_notes: action === "reject" ? rejectionNote : "",
       });
+
+      const itemType = item.config.itemField === "book_id" ? "book" : "game";
+      const itemId = String(item.row[item.config.itemField]);
+      const eventCollection = db.collection("payment_notification_events");
+      // Preserve the original submitted event when a pending payment is reviewed.
+      tx.set(eventCollection.doc(`${item.ref.id}_pending`), {
+        user_id: String(item.row.user_id),
+        payment_id: item.ref.id,
+        item_id: itemId,
+        item_type: itemType,
+        status: "pending",
+        created_at: item.row.created_at || reviewedAt,
+      }, { merge: true });
+      tx.set(eventCollection.doc(`${item.ref.id}_${nextStatus}`), {
+        user_id: String(item.row.user_id),
+        payment_id: item.ref.id,
+        item_id: itemId,
+        item_type: itemType,
+        status: nextStatus,
+        created_at: reviewedAt,
+      }, { merge: true });
     }
     for (const purchase of purchaseReads) {
       if (!purchase.purchaseSnapshot.exists) {
@@ -175,6 +197,14 @@ exports.submitCartPayment = onCall({ region: "asia-southeast1" }, async (request
         reference_number: reference, proof_image_url: proofPath,
         amount: cents / 100, cart_amount: total / 100,
         created_at: submittedAt, admin_notes: "",
+      });
+      tx.create(db.collection("payment_notification_events").doc(`${item.paymentRef.id}_pending`), {
+        user_id: uid,
+        payment_id: item.paymentRef.id,
+        item_id: item.id,
+        item_type: item.type,
+        status: "pending",
+        created_at: submittedAt,
       });
     }
     return { submitted: true, items: writes.length };
