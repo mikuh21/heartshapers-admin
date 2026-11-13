@@ -5,6 +5,7 @@ const { defineSecret } = require("firebase-functions/params");
 const { getAuth } = require("firebase-admin/auth");
 const { getStorage } = require("firebase-admin/storage");
 const crypto = require("node:crypto");
+const { passwordResetEmail, paymentReceiptEmail } = require("./emailTemplates");
 const SMTP_HOST = defineSecret("SMTP_HOST");
 const SMTP_PORT = defineSecret("SMTP_PORT");
 const SMTP_USER = defineSecret("SMTP_USER");
@@ -353,7 +354,14 @@ exports.passwordResetOtp = onCall({
         const nodemailer = require("nodemailer");
         const port = Number(SMTP_PORT.value() || 587);
         const transport = nodemailer.createTransport({ host: SMTP_HOST.value(), port, secure: port === 465, auth: { user: SMTP_USER.value(), pass: SMTP_PASSWORD.value() } });
-        await transport.sendMail({ from: SMTP_FROM.value(), to: user.email, subject: "Your HEARTSHAPERS password reset code", text: `Your password reset code is ${code}. It expires in 10 minutes.` });
+        const emailMessage = passwordResetEmail({ email: user.email, code });
+        await transport.sendMail({
+          from: SMTP_FROM.value(),
+          to: user.email,
+          subject: emailMessage.subject,
+          text: emailMessage.text,
+          html: emailMessage.html,
+        });
       }
     } catch (error) {
       if (error?.code !== "auth/user-not-found") {
@@ -428,11 +436,16 @@ exports.sendPaymentVerificationEmail = onCall({
     secure: port === 465,
     auth: { user: SMTP_USER.value(), pass: SMTP_PASSWORD.value() }
   });
+  const emailMessage = paymentReceiptEmail({
+    name: user.displayName || user.customClaims?.full_name || "",
+    referenceNumber: String(reference_number),
+  });
   await transport.sendMail({
     from: SMTP_FROM.value(),
     to: user.email,
-    subject: "HEARTSHAPERS payment verified",
-    text: `Hello ${user.displayName || "there"},\n\nYour payment has been verified successfully. Access to your purchased HEARTSHAPERS content has been granted.\n\nPayment reference: ${String(reference_number)}\n\nThank you for supporting HEARTSHAPERS.`
+    subject: emailMessage.subject,
+    text: emailMessage.text,
+    html: emailMessage.html,
   });
   return { sent: true };
 });
