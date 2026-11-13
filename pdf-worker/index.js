@@ -41,8 +41,8 @@ function validatePath(assetType, assetId, sourcePath) {
     const folders = parts.slice(1, -1);
     return parts.length >= 3 && parts.length <= 4 &&
       parts[0] === "pdfs" &&
-      folders.every(segment => segment && segment !== "." && segment !== ".." && !/[\\\\\\u0000-\\u001f]/.test(segment)) &&
-      /^[A-Za-z0-9._-]+\\.pdf$/i.test(parts[parts.length - 1]) &&
+      folders.every(segment => segment && segment !== "." && segment !== ".." && !(segment.includes("/") || segment.includes("\\\\") || /[\\u0000-\\u001f]/.test(segment))) &&
+      /^[A-Za-z0-9._-]+\.pdf$/i.test(parts[parts.length - 1]) &&
       !folders.includes("optimized");
   }
 
