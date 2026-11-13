@@ -266,11 +266,28 @@ exports.claimMobileDevice = onCall({ region: "asia-southeast1" }, async (request
   if (user.disabled) throw new HttpsError("permission-denied", "This account is disabled.");
   const bindingRef = db.collection("device_bindings").doc(user.uid);
   await db.runTransaction(async (transaction) => {
-    const snapshot = await transaction.get(bindingRef);
+    // Enforce both directions: one account per device AND one device per account.
+    // Querying inside the transaction prevents two accounts from claiming the
+    // same installation concurrently.
+    const [snapshot, deviceBindingsSnapshot] = await Promise.all([
+      transaction.get(bindingRef),
+      transaction.get(
+        db.collection("device_bindings").where("device_id", "==", deviceId),
+      ),
+    ]);
+
     const existingDeviceId = String(snapshot.data()?.device_id || "");
     if (existingDeviceId && existingDeviceId !== deviceId) {
       throw new HttpsError("failed-precondition", "This account is already linked to another mobile device. Contact an administrator to move it.");
     }
+
+    const otherAccountBinding = deviceBindingsSnapshot.docs.find(
+      (binding) => binding.id !== user.uid,
+    );
+    if (otherAccountBinding) {
+      throw new HttpsError("failed-precondition", "This mobile device is already linked to another account. Contact an administrator to reset the device link before switching accounts.");
+    }
+
     transaction.set(bindingRef, {
       device_id: deviceId,
       platform,
