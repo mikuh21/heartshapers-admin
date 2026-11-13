@@ -125,7 +125,7 @@ ${detailPanel("Payment reference", referenceNumber)}
 ${itemTable}
 ${rejectionPanel}
 <div style="margin-top:18px;padding:14px 16px;border-radius:9px;background:#f7f7f8;border:1px solid #e9e9e9;color:#666666;font-size:13px;line-height:1.65;">${copy.footer}</div>`;
-  const textItems = items.map((item) => `- ${item.type === "game" ? "Game" : "Book"}: ${item.name || "Content"} — PHP ${Number(item.amount || 0).toFixed(2)}`).join("\\n");
+  const textItems = items.map((item) => `- ${item.type === "game" ? "Game" : "Book"}: ${item.name || "Content"} — PHP ${Number(item.amount || 0).toFixed(2)}`).join("\n");
   return {
     subject: copy.subject,
     html: shell({ preheader: copy.intro, heading: copy.heading, subtitle: copy.subtitle, body, footerNote: "Keep this email for your records. If you contact the Heartshapers team, include your payment reference." }),
