@@ -34,3 +34,8 @@ The mobile password reset callable uses `OTP_PEPPER` to hash five-digit codes an
 The callable responses include `email_sent`. If SMTP delivery fails after the account is created, the account remains created with `emailVerified=false`; the function logs a sanitized failure code and returns `email_sent=false`. Do not treat the account as verified. Configure SMTP secrets before account creation in production and use the Firebase Auth console or a dedicated resend flow to retry verification.
 
 Role checks support Firebase custom claims `role` and `roles` (string or array), and prioritize `super_admin` when both claims are present.
+
+
+## Payment transaction emails
+
+The `submitCartPayment` callable sends an itemized **Pending** email after the payment transaction is committed. The `reviewCartPayment` callable sends a separate itemized **Verified** or **Rejected** email after the review transaction is committed. Each email includes the transaction reference, every submitted book/game with its server-validated item amount, the transaction total, and (for rejected payments) the admin's rejection reason. SMTP delivery runs after the Firestore transaction so a mail-provider failure does not roll back a payment submission or review; each callable returns `email_sent` to report delivery success. Both callables require the configured SMTP secrets.
