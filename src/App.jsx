@@ -1759,7 +1759,16 @@ function BookModal({ book, onClose, onSaved }) {
     const isCover = folder === "covers";
     const uploadFile = isCover ? await optimizeBookCover(file) : file;
     const safeName = uploadFile.name.toLowerCase().replace(/[^a-z0-9._-]/g, "-");
-    const firebasePath = `${folder}/${crypto.randomUUID()}-${safeName}`;
+    const safeSegment = (value) => String(value || "")
+      .normalize("NFKD").replace(/[\\u0300-\\u036f]/g, "")
+      .trim().toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "");
+    const categoryPath = !isCover
+      ? [safeSegment(form.pillar), safeSegment(form.subcategory)].filter(Boolean).join("/")
+      : "";
+    if (!isCover && !categoryPath) throw new Error("Select a pillar before uploading a book PDF.");
+    const firebasePath = isCover
+      ? `${folder}/${crypto.randomUUID()}-${safeName}`
+      : `pdfs/${categoryPath}/${crypto.randomUUID()}-${safeName}`;
     const uploaded = await uploadFirebaseAsset(firebasePath, uploadFile, uploadFile.type || (isCover ? "image/webp" : "application/pdf"));
     let path = uploaded.path;
     if (!isCover) {
