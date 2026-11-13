@@ -122,6 +122,13 @@ service cloud.firestore {
       allow create, update, delete: if false;
     }
 
+    // Payment status history is written only by trusted Cloud Functions.
+    // Customers can read only their own notification events.
+    match /payment_notification_events/{eventId} {
+      allow read: if customerSignedIn() && resource.data.get('user_id', '') == request.auth.uid;
+      allow create, update, delete: if false;
+    }
+
     match /book_purchases/{purchaseId} {
       allow read: if hasAdminRole() || ownsRecord();
       allow create, update, delete: if false;
