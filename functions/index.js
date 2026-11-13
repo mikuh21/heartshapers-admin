@@ -5,7 +5,7 @@ const { defineSecret } = require("firebase-functions/params");
 const { getAuth } = require("firebase-admin/auth");
 const { getStorage } = require("firebase-admin/storage");
 const crypto = require("node:crypto");
-const { passwordResetEmail, paymentReceiptEmail } = require("./emailTemplates");
+const { passwordResetEmail, paymentStatusEmail } = require("./emailTemplates");
 const SMTP_HOST = defineSecret("SMTP_HOST");
 const SMTP_PORT = defineSecret("SMTP_PORT");
 const SMTP_USER = defineSecret("SMTP_USER");
@@ -15,6 +15,37 @@ const OTP_PEPPER = defineSecret("OTP_PEPPER");
 
 initializeApp();
 const db = getFirestore();
+
+async function sendPaymentStatusEmail({ userId, referenceNumber, status, items, total, rejectionReason = "" }) {
+  try {
+    const user = await getAuth().getUser(String(userId));
+    if (!user.email) return false;
+    const nodemailer = require("nodemailer");
+    const port = Number(SMTP_PORT.value() || 587);
+    const transport = nodemailer.createTransport({
+      host: SMTP_HOST.value(), port, secure: port === 465,
+      auth: { user: SMTP_USER.value(), pass: SMTP_PASSWORD.value() },
+    });
+    const message = paymentStatusEmail({
+      name: user.displayName || user.customClaims?.full_name || "",
+      referenceNumber,
+      status,
+      items,
+      total,
+      rejectionReason,
+    });
+    await transport.sendMail({
+      from: SMTP_FROM.value(), to: user.email,
+      subject: message.subject, text: message.text, html: message.html,
+    });
+    return true;
+  } catch (error) {
+    console.error("Payment status email delivery failed.", {
+      status, code: error?.code || error?.name || "UNKNOWN",
+    });
+    return false;
+  }
+}
 
 function requireAdmin(request) {
   if (!request.auth) throw new HttpsError("unauthenticated", "Sign in to review payments.");
@@ -26,7 +57,7 @@ function requireAdmin(request) {
   }
 }
 
-exports.reviewCartPayment = onCall({ region: "asia-southeast1" }, async (request) => {
+exports.reviewCartPayment = onCall({ region: "asia-southeast1", secrets: [SMTP_HOST, SMTP_PORT, SMTP_USER, SMTP_PASSWORD, SMTP_FROM] }, async (request) => {
   requireAdmin(request);
   const { user_id, reference_number, proof_image_url, action, note } = request.data || {};
   if (!user_id || !reference_number || !proof_image_url || !["verify", "reject"].includes(action)) {
@@ -44,7 +75,7 @@ exports.reviewCartPayment = onCall({ region: "asia-southeast1" }, async (request
   const adminId = request.auth.uid;
   const adminEmail = request.auth.token.email || "";
 
-  return db.runTransaction(async (tx) => {
+  const reviewResult = await db.runTransaction(async (tx) => {
     const pending = [];
     for (const config of paymentCollections) {
       const snap = await tx.get(db.collection(config.name)
@@ -119,13 +150,36 @@ exports.reviewCartPayment = onCall({ region: "asia-southeast1" }, async (request
       },
       created_at: FieldValue.serverTimestamp(),
     });
-    return { status: action === "verify" ? "verified" : "rejected", items_reviewed: pending.length };
+    return {
+      status: action === "verify" ? "verified" : "rejected",
+      items_reviewed: pending.length,
+      emailItems: pending.map((item) => ({
+        type: item.config.itemField === "book_id" ? "book" : "game",
+        id: String(item.row[item.config.itemField]),
+        amount: Number(item.row.amount || 0),
+      })),
+      total: pending.reduce((sum, item) => sum + Math.round(Number(item.row.amount || 0) * 100), 0) / 100,
+    };
   });
+  const emailCatalogs = await Promise.all(reviewResult.emailItems.map(async (item) => {
+    const collectionName = item.type === "book" ? "books" : "games";
+    const snapshot = await db.collection(collectionName).doc(item.id).get();
+    return { ...item, name: snapshot.exists ? (snapshot.data().title || snapshot.data().name || "Content") : "Content" };
+  }));
+  const emailSent = await sendPaymentStatusEmail({
+    userId: user_id,
+    referenceNumber: String(reference_number),
+    status: reviewResult.status,
+    items: emailCatalogs,
+    total: reviewResult.total,
+    rejectionReason: action === "reject" ? rejectionNote : "",
+  });
+  return { status: reviewResult.status, items_reviewed: reviewResult.items_reviewed, email_sent: emailSent };
 });
 
 // Mobile cart submissions are validated and written here so prices, ownership,
 // and payment status never depend on client-supplied Firestore writes.
-exports.submitCartPayment = onCall({ region: "asia-southeast1" }, async (request) => {
+exports.submitCartPayment = onCall({ region: "asia-southeast1", secrets: [SMTP_HOST, SMTP_PORT, SMTP_USER, SMTP_PASSWORD, SMTP_FROM] }, async (request) => {
   if (!request.auth) throw new HttpsError("unauthenticated", "Sign in before submitting a payment.");
   const uid = request.auth.uid;
   await requireActiveMobileDevice(request);
@@ -156,7 +210,7 @@ exports.submitCartPayment = onCall({ region: "asia-southeast1" }, async (request
     };
   });
   const profileRef = db.collection("users").doc(uid);
-  return db.runTransaction(async (tx) => {
+  const submissionResult = await db.runTransaction(async (tx) => {
     const profile = await tx.get(profileRef);
     if (profile.exists && profile.data().disabled === true) throw new HttpsError("permission-denied", "This account is disabled.");
     const membership = String(request.auth.token.membership_tier || profile.data()?.membership_tier || "regular").toLowerCase();
@@ -185,7 +239,7 @@ exports.submitCartPayment = onCall({ region: "asia-southeast1" }, async (request
       }
       const cents = Math.round(price * 100);
       total += cents;
-      writes.push({ item, cents });
+      writes.push({ item, cents, catalog });
     }
     if (!Number.isFinite(Number(amount)) || Math.round(Number(amount) * 100) !== total) {
       throw new HttpsError("failed-precondition", "The cart total changed. Please refresh and try again.");
@@ -207,8 +261,21 @@ exports.submitCartPayment = onCall({ region: "asia-southeast1" }, async (request
         created_at: submittedAt,
       });
     }
-    return { submitted: true, items: writes.length };
+    return {
+      submitted: true,
+      items: writes.length,
+      emailItems: writes.map(({ item, cents }) => ({ type: item.type, id: item.id, amount: cents / 100, name: item.catalog.title || item.catalog.name || "Content" })),
+      total: total / 100,
+    };
   });
+  const emailSent = await sendPaymentStatusEmail({
+    userId: uid,
+    referenceNumber: reference,
+    status: "pending",
+    items: submissionResult.emailItems,
+    total: submissionResult.total,
+  });
+  return { submitted: true, items: submissionResult.items, email_sent: emailSent };
 });
 
 async function requireContentEntitlement(uid, type, itemId, request) {
