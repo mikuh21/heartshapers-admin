@@ -359,6 +359,24 @@ exports.getProtectedGameAssetUrls = onCall({ region: "asia-southeast1" }, async 
 // Game rules and card documents can contain paid content, so mobile clients
 // must fetch them through this entitlement-checked callable instead of reading
 // the nested Firestore collections directly.
+// Rules are a preview shown on the game details screen, including for locked games.
+ // Only rules are exposed here; game cards remain protected by purchase entitlement.
+exports.getGameRulesPreview = onCall({ region: "asia-southeast1" }, async (request) => {
+  if (!request.auth) throw new HttpsError("unauthenticated", "Sign in to view game rules.");
+  const gameId = String(request.data?.gameId || "").trim();
+  if (!gameId || gameId.length > 128) {
+    throw new HttpsError("invalid-argument", "A valid game ID is required.");
+  }
+  await requireActiveMobileDevice(request);
+  const game = await db.collection("games").doc(gameId).get();
+  if (!game.exists || game.data().deleted_at) {
+    throw new HttpsError("not-found", "This game is unavailable.");
+  }
+  const snapshot = await db.collection("games").doc(gameId)
+    .collection("game_rules").orderBy("sort_order", "asc").get();
+  return { items: snapshot.docs.map((document) => ({ id: document.id, ...document.data() })) };
+});
+
 exports.getProtectedGameContent = onCall({ region: "asia-southeast1" }, async (request) => {
   if (!request.auth) throw new HttpsError("unauthenticated", "Sign in to open this game.");
   const gameId = String(request.data?.gameId || "").trim();
