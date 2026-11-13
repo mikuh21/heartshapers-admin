@@ -36,10 +36,14 @@ function validatePath(assetType, assetId, sourcePath) {
   if (sourcePath.includes("..") || sourcePath.includes("\\\\") || sourcePath.startsWith("/")) return false;
 
   if (assetType === "book") {
-    // One or two category segments: pillar[/subcategory]/filename.pdf.
-    // Optimized outputs are stored beside the original in an /optimized/{bookId}/ folder.
-    return /^pdfs\/[a-z0-9]+(?:-[a-z0-9]+)*(?:\/[a-z0-9]+(?:-[a-z0-9]+)*)?\/[A-Za-z0-9._-]+\.pdf$/i.test(sourcePath)
-      && !sourcePath.includes("/optimized/");
+    // Keep original and optimized PDFs under the same exact pillar/category path.
+    const parts = sourcePath.split("/");
+    const folders = parts.slice(1, -1);
+    return parts.length >= 3 && parts.length <= 4 &&
+      parts[0] === "pdfs" &&
+      folders.every(segment => segment && segment !== "." && segment !== ".." && !/[\\\\\\u0000-\\u001f]/.test(segment)) &&
+      /^[A-Za-z0-9._-]+\\.pdf$/i.test(parts[parts.length - 1]) &&
+      !folders.includes("optimized");
   }
 
   if (assetType === "game") {
