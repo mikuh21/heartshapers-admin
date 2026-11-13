@@ -33,14 +33,14 @@ exports.processPdfAsset = onCall({
   const bookFolders = bookPathParts.slice(1, -1);
   const validBookPath = bookPathParts.length >= 3 && bookPathParts.length <= 4 &&
     bookPathParts[0] === "pdfs" &&
-    bookFolders.every(segment => segment && segment !== "." && segment !== ".." && !/[\\\\\\u0000-\\u001f]/.test(segment)) &&
-    /^[A-Za-z0-9._-]+\\.pdf$/i.test(bookPathParts[bookPathParts.length - 1]) &&
+    bookFolders.every(segment => segment && segment !== "." && segment !== ".." && !(segment.includes("/") || segment.includes("\\\\") || /[\\u0000-\\u001f]/.test(segment))) &&
+    /^[A-Za-z0-9._-]+\.pdf$/i.test(bookPathParts[bookPathParts.length - 1]) &&
     !bookFolders.includes("optimized");
   if (!["book", "game"].includes(assetType) ||
       !/^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$/.test(assetId) ||
       (assetType === "book" && !validBookPath) ||
       (assetType === "game" && (sourcePath.includes("..") || sourcePath.includes("\\\\") ||
-        !new RegExp("^games/" + assetId + "/source/[A-Za-z0-9._-]+\\.pdf$", "i").test(sourcePath)))) {
+        !new RegExp("^games/" + assetId + "/source/[A-Za-z0-9._-]+\.pdf$", "i").test(sourcePath)))) {
     throw new HttpsError("invalid-argument", "Invalid PDF asset details.");
   }
 
