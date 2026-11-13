@@ -1764,7 +1764,7 @@ function BookModal({ book, onClose, onSaved }) {
       ? [String(form.pillar || "").trim(), String(form.subcategory || "").trim()].filter(Boolean)
       : [];
     if (!isCover && !folderSegments.length) throw new Error("Select a pillar before uploading a book PDF.");
-    if (!isCover && folderSegments.some((segment) => segment === "." || segment === ".." || /[\\/\\\\\\u0000-\\u001f]/.test(segment))) {
+    if (!isCover && folderSegments.some((segment) => segment === "." || segment === ".." || (segment.includes("/") || segment.includes("\\\\") || /[\\u0000-\\u001f]/.test(segment)))) {
       throw new Error("The selected pillar or subcategory has an invalid Storage folder name.");
     }
     const categoryPath = folderSegments.join("/");
