@@ -60,8 +60,9 @@ exports.processPdfAsset = onCall({
     });
     const result = await response.json().catch(() => ({}));
     if (!response.ok) throw new Error(result.error || "The PDF worker rejected the file.");
+    const sourceDirectory = sourcePath.slice(0, sourcePath.lastIndexOf("/"));
     if (typeof result.optimizedPath !== "string" ||
-        (assetType === "book" && !result.optimizedPath.startsWith("pdfs/optimized/" + assetId + "/")) ||
+        (assetType === "book" && !result.optimizedPath.startsWith(sourceDirectory + "/optimized/" + assetId + "/")) ||
         (assetType === "game" && !result.optimizedPath.startsWith("games/" + assetId + "/source/optimized-"))) {
       throw new Error("The PDF worker returned an invalid optimized Storage path.");
     }
