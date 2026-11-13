@@ -133,4 +133,14 @@ ${rejectionPanel}
   };
 }
 
-module.exports = { verificationEmail, passwordResetEmail, paymentStatusEmail };
+function paymentReceiptEmail({ name, referenceNumber }) {
+  return paymentStatusEmail({
+    name,
+    referenceNumber,
+    status: "verified",
+    items: [],
+    total: 0,
+  });
+}
+
+module.exports = { verificationEmail, passwordResetEmail, paymentReceiptEmail, paymentStatusEmail };
