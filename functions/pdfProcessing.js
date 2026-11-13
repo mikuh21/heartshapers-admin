@@ -33,7 +33,7 @@ exports.processPdfAsset = onCall({
   const bookFolders = bookPathParts.slice(1, -1);
   const validBookPath = bookPathParts.length >= 3 && bookPathParts.length <= 4 &&
     bookPathParts[0] === "pdfs" &&
-    bookFolders.every(segment => segment && segment !== "." && segment !== ".." && !(segment.includes("/") || segment.includes("\\\\") || /[\\u0000-\\u001f]/.test(segment))) &&
+    bookFolders.every(segment => segment && segment !== "." && segment !== ".." && !(segment.includes("/") || segment.includes("\\"))) &&
     /^[A-Za-z0-9._-]+\.pdf$/i.test(bookPathParts[bookPathParts.length - 1]) &&
     !bookFolders.includes("optimized");
   if (!["book", "game"].includes(assetType) ||
