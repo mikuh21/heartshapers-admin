@@ -1759,13 +1759,15 @@ function BookModal({ book, onClose, onSaved }) {
     const isCover = folder === "covers";
     const uploadFile = isCover ? await optimizeBookCover(file) : file;
     const safeName = uploadFile.name.toLowerCase().replace(/[^a-z0-9._-]/g, "-");
-    const safeSegment = (value) => String(value || "")
-      .normalize("NFKD").replace(/[\\u0300-\\u036f]/g, "")
-      .trim().toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "");
-    const categoryPath = !isCover
-      ? [safeSegment(form.pillar), safeSegment(form.subcategory)].filter(Boolean).join("/")
-      : "";
-    if (!isCover && !categoryPath) throw new Error("Select a pillar before uploading a book PDF.");
+    // Preserve the exact existing pillar/category Storage folder names.
+    const folderSegments = !isCover
+      ? [String(form.pillar || "").trim(), String(form.subcategory || "").trim()].filter(Boolean)
+      : [];
+    if (!isCover && !folderSegments.length) throw new Error("Select a pillar before uploading a book PDF.");
+    if (!isCover && folderSegments.some((segment) => segment === "." || segment === ".." || /[\\/\\\\\\u0000-\\u001f]/.test(segment))) {
+      throw new Error("The selected pillar or subcategory has an invalid Storage folder name.");
+    }
+    const categoryPath = folderSegments.join("/");
     const firebasePath = isCover
       ? `${folder}/${crypto.randomUUID()}-${safeName}`
       : `pdfs/${categoryPath}/${crypto.randomUUID()}-${safeName}`;
