@@ -1017,11 +1017,6 @@ function Dashboard({ goBooks, adminName, goToPage }) {
             <span className="quick-action-copy"><strong>Manage Users</strong><small>View accounts and membership</small></span>
             <span className="quick-action-arrow">→</span>
           </button>
-          <button type="button" className="quick-action-card" onClick={() => goToPage("settings")}>
-            <span className="quick-action-icon"><Settings size={20} /></span>
-            <span className="quick-action-copy"><strong>Settings</strong><small>Configure app and payment settings</small></span>
-            <span className="quick-action-arrow">→</span>
-          </button>
         </div>
       </section>
     </>
