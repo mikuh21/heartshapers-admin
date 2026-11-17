@@ -297,6 +297,39 @@ exports.createManagedAdmin = onCall({ region: REGION, secrets: MAIL_SECRETS }, a
   }
 });
 
+exports.updateManagedAdminDetails = onCall({ region: REGION }, async (request) => {
+  requireAdmin(request, true);
+  const { userId, full_name, email } = request.data || {};
+  const uid = String(userId || "").trim();
+  const name = String(full_name || "").trim();
+  const normalizedEmail = String(email || "").trim().toLowerCase();
+  if (!uid) throw new HttpsError("invalid-argument", "Administrator account is required.");
+  if (!name) throw new HttpsError("invalid-argument", "Full name is required.");
+  if (!/^[^\\s@]+@[^\\s@]+\\.[^\\s@]+$/.test(normalizedEmail)) {
+    throw new HttpsError("invalid-argument", "Please enter a valid email address.");
+  }
+  const auth = getAuth();
+  const target = await auth.getUser(uid);
+  if (!["admin", "super_admin"].includes(String(target.customClaims?.role || "").toLowerCase())) {
+    throw new HttpsError("failed-precondition", "The selected account is not an administrator.");
+  }
+  try {
+    await auth.updateUser(uid, { displayName: name, email: normalizedEmail });
+    await auth.setCustomUserClaims(uid, { ...(target.customClaims || {}), full_name: name });
+    await db.collection("users").doc(uid).set({
+      uid, full_name: name, email: normalizedEmail, updated_at: FieldValue.serverTimestamp()
+    }, { merge: true });
+    const updated = await auth.getUser(uid);
+    return { admin: publicUser({ ...updated, customClaims: { ...(updated.customClaims || {}), full_name: name } }) };
+  } catch (error) {
+    if (error.code === "auth/email-already-exists") {
+      throw new HttpsError("already-exists", "An account with this email already exists.");
+    }
+    console.error("Administrator details update failed.", { uid, code: error.code || error.name || "ADMIN_UPDATE_FAILED" });
+    throw new HttpsError("internal", "Unable to update administrator details. Please try again.");
+  }
+});
+
 exports.updateManagedAdminStatus = onCall({ region: REGION }, async (request) => {
   requireAdmin(request, true);
   const { userId, disabled } = request.data || {};
