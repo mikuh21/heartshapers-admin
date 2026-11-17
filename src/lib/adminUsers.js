@@ -108,9 +108,17 @@ export function isAdminUser(user) {
   return isAdminWebUser(user);
 }
 
+function sortNewestFirst(accounts) {
+  return accounts.sort((a, b) => {
+    const aTime = a.created_at ? new Date(a.created_at).getTime() : 0;
+    const bTime = b.created_at ? new Date(b.created_at).getTime() : 0;
+    return bTime - aTime;
+  });
+}
+
 export async function listUsers() {
   const data = await callUserManagement("listManagedUsers");
-  return (Array.isArray(data.users) ? data.users : []).map(normalizeUser);
+  return sortNewestFirst((Array.isArray(data.users) ? data.users : []).map(normalizeUser));
 }
 
 
@@ -181,7 +189,7 @@ export async function createUser({ full_name, email, password, membership_tier =
 
 export async function listAdmins() {
   const data = await callUserManagement("listManagedAdmins");
-  return (Array.isArray(data.admins) ? data.admins : []).map(normalizeUser);
+  return sortNewestFirst((Array.isArray(data.admins) ? data.admins : []).map(normalizeUser));
 }
 
 export async function createAdmin({ full_name, email, password }) {
