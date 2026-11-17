@@ -2518,6 +2518,7 @@ function AdminsPage() {
   const [actionLoadingId, setActionLoadingId] = useState(null);
   const [modalOpen, setModalOpen] = useState(false);
   const [adminToToggle, setAdminToToggle] = useState(null);
+  const [adminToEdit, setAdminToEdit] = useState(null);
 
   async function loadAdmins() {
     setLoading(true);
@@ -2630,13 +2631,16 @@ function AdminsPage() {
                     </td>
                     <td>{formatDate(admin.created_at)}</td>
                     <td>
-                      <button
-                        className="secondary-btn small danger"
-                        onClick={() => setAdminToToggle(admin)}
-                        disabled={actionLoadingId === admin.id}
-                      >
-                        {actionLoadingId === admin.id ? <Loader2 size={16} className="spin" /> : admin.disabled ? "Enable" : "Disable"}
-                      </button>
+                      <div className="user-actions">
+                        <button className="secondary-btn small" onClick={() => setAdminToEdit(admin)} disabled={actionLoadingId === admin.id}>Edit</button>
+                        <button
+                          className="secondary-btn small danger"
+                          onClick={() => setAdminToToggle(admin)}
+                          disabled={actionLoadingId === admin.id}
+                        >
+                          {actionLoadingId === admin.id ? <Loader2 size={16} className="spin" /> : admin.disabled ? "Enable" : "Disable"}
+                        </button>
+                      </div>
                     </td>
                   </tr>
                 ))}
@@ -2653,6 +2657,17 @@ function AdminsPage() {
           showToast("Admin created successfully.", "success");
         }} />
       )}
+      {adminToEdit && (
+        <EditAdminModal
+          admin={adminToEdit}
+          onClose={() => setAdminToEdit(null)}
+          onUpdated={async () => {
+            setAdminToEdit(null);
+            await loadAdmins();
+            showToast("Administrator details updated successfully.", "success");
+          }}
+        />
+      )}
       {adminToToggle && (
         <ConfirmModal
           title={`${adminToToggle.disabled ? "Enable" : "Disable"} Admin?`}
@@ -2665,6 +2680,64 @@ function AdminsPage() {
         />
       )}
     </>
+  );
+}
+
+function EditAdminModal({ admin, onClose, onUpdated }) {
+  const [form, setForm] = useState({ full_name: admin.full_name || "", email: admin.email || "" });
+  const [errors, setErrors] = useState({});
+  const [busy, setBusy] = useState(false);
+
+  function updateField(field, value) {
+    setForm((current) => ({ ...current, [field]: value }));
+    setErrors((current) => ({ ...current, [field]: "" }));
+  }
+
+  async function submit(event) {
+    event.preventDefault();
+    const nextErrors = {};
+    if (!form.full_name.trim()) nextErrors.full_name = "Full Name is required.";
+    const email = form.email.trim().toLowerCase();
+    if (!email) nextErrors.email = "Email is required.";
+    else if (!/^[^\\s@]+@[^\\s@]+\\.[^\\s@]+$/.test(email)) nextErrors.email = "Enter a valid email address.";
+    setErrors(nextErrors);
+    if (Object.keys(nextErrors).length) return;
+
+    setBusy(true);
+    try {
+      await updateAdminDetails({ userId: admin.id, full_name: form.full_name.trim(), email });
+      onUpdated();
+    } catch (error) {
+      setErrors({ submit: error.message || "Unable to update administrator details." });
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <div className="modal-backdrop">
+      <div className="modal user-modal">
+        <div className="modal-header">
+          <div><h3>Edit Admin</h3><p className="muted">Update the administrator's name and email address.</p></div>
+          <button className="icon-btn" onClick={onClose} disabled={busy}><X size={20} /></button>
+        </div>
+        <form onSubmit={submit}>
+          <div className="modal-body">
+            {errors.submit && <div className="error-box">{errors.submit}</div>}
+            <label>Full Name <span className="required-marker">*</span></label>
+            <input value={form.full_name} onChange={(event) => updateField("full_name", event.target.value)} placeholder="Enter full name" />
+            {errors.full_name && <div className="field-error">{errors.full_name}</div>}
+            <label>Email <span className="required-marker">*</span></label>
+            <input type="email" value={form.email} onChange={(event) => updateField("email", event.target.value)} placeholder="admin@example.com" />
+            {errors.email && <div className="field-error">{errors.email}</div>}
+          </div>
+          <div className="modal-footer">
+            <button type="button" className="secondary-btn" onClick={onClose} disabled={busy}>Cancel</button>
+            <button type="submit" className="primary-btn" disabled={busy}>{busy ? "Saving..." : "Save Changes"}</button>
+          </div>
+        </form>
+      </div>
+    </div>
   );
 }
 
@@ -3158,7 +3231,7 @@ function PaymentsPage({ canManagePayments }) {
   return (
     <>
       <div className="page-heading">
-        <div><h3>Payments</h3><p className="muted">Review GCash payment submissions.</p></div>
+        <div><h3>Payments</h3><p className="muted">Review payment submissions.</p></div>
       </div>
       <div className="toolbar">
         <div className="search-box"><Search size={18} /><input value={search} onChange={(event) => setSearch(event.target.value)} placeholder="Search payments..." /></div>
