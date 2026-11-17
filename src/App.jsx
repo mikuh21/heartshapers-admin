@@ -3201,7 +3201,8 @@ function PaymentsPage({ canManagePayments }) {
     try {
       const proofLocation = String(payment.proof_image_url || "").trim();
       if (!proofLocation) throw new Error("Payment proof location is missing.");
-      const url = /^https?:\\/\\//i.test(proofLocation)
+      const isRemoteUrl = proofLocation.startsWith("https://") || proofLocation.startsWith("http://");
+      const url = isRemoteUrl
         ? proofLocation
         : await getDownloadURL(firebaseStorageRef(firebaseStorage, proofLocation));
       if (requestId !== proofRequestSequence.current) return;
