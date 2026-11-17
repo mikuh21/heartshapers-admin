@@ -2958,7 +2958,7 @@ function PaymentsPage({ canManagePayments }) {
   const [users, setUsers] = useState([]);
   const [search, setSearch] = useState("");
   const [status, setStatus] = useState("all");
-  const [paymentCategory, setPaymentCategory] = useState("books");
+  const [paymentCategory, setPaymentCategory] = useState("all");
   const [selected, setSelected] = useState(null);
   const [showVerifyConfirmation, setShowVerifyConfirmation] = useState(false);
   const [proofUrl, setProofUrl] = useState("");
@@ -3027,7 +3027,9 @@ function PaymentsPage({ canManagePayments }) {
             ? "rejected"
             : "pending";
     }
-    setPayments([...grouped.values()].map((group) => ({ ...group, amount: Math.round(group.amount * 100) / 100 })));
+    setPayments([...grouped.values()]
+      .map((group) => ({ ...group, amount: Math.round(group.amount * 100) / 100 }))
+      .sort((a, b) => (toDateValue(b.created_at)?.getTime() || 0) - (toDateValue(a.created_at)?.getTime() || 0)));
     setUsers(userRows);
     setSelected(null);
     setLoading(false);
@@ -3065,7 +3067,8 @@ function PaymentsPage({ canManagePayments }) {
   const filtered = payments.filter((payment) => {
     const user = userById.get(payment.user_id);
     const haystack = `${user?.full_name || ""} ${user?.email || ""} ${(payment.payment_items || []).map((item) => item.title).join(" ")} ${payment.reference_number}`.toLowerCase();
-    return (status === "all" || payment.status === status) && haystack.includes(search.toLowerCase());
+    const matchesCategory = paymentCategory === "all" || (payment.payment_items || []).some((item) => item.type === (paymentCategory === "games" ? "game" : "book"));
+    return matchesCategory && (status === "all" || payment.status === status) && haystack.includes(search.toLowerCase());
   });
 
   async function review(action) {
@@ -3130,12 +3133,12 @@ function PaymentsPage({ canManagePayments }) {
       </div>
       <div className="toolbar">
         <div className="search-box"><Search size={18} /><input value={search} onChange={(event) => setSearch(event.target.value)} placeholder="Search payments..." /></div>
-        <div className="select-box"><select value={paymentCategory} onChange={(event) => { setSelected(null); setPaymentCategory(event.target.value); }} aria-label="Filter payments by category"><option value="books">All items (Books &amp; Games)</option><option value="games">Games</option></select><ChevronDown size={16} /></div>
+        <div className="select-box"><select value={paymentCategory} onChange={(event) => { setSelected(null); setPaymentCategory(event.target.value); }} aria-label="Filter payments by category"><option value="all">All items (Books &amp; Games)</option><option value="books">Books</option><option value="games">Games</option></select><ChevronDown size={16} /></div>
         <div className="select-box"><select value={status} onChange={(event) => setStatus(event.target.value)}><option value="all">All statuses</option><option value="pending">Pending</option><option value="verified">Verified</option><option value="rejected">Rejected</option></select><ChevronDown size={16} /></div>
       </div>
       {error && <div className="error-box page-error">{error}</div>}
       <div className="table-card">
-        {loading ? <div className="empty-state"><Loader2 className="spin" /> Loading payments...</div> : filtered.length === 0 ? <div className="empty-state"><Receipt size={34} /><strong>No {paymentCategory} payments found</strong><span>{status === "pending" ? "Pending submissions will appear here." : `No ${paymentCategory} submissions match the selected filters.`}</span></div> : (
+        {loading ? <div className="empty-state"><Loader2 className="spin" /> Loading payments...</div> : filtered.length === 0 ? <div className="empty-state"><Receipt size={34} /><strong>No {paymentCategory === "all" ? "" : paymentCategory + " "}payments found</strong><span>{status === "pending" ? "Pending submissions will appear here." : "No submissions match the selected filters."}</span></div> : (
           <div className="table-wrap"><table><thead><tr><th>Customer</th><th>Items</th><th>Amount</th><th>Reference</th><th>Status</th><th>Submitted</th></tr></thead><tbody>
             {filtered.map((payment) => { const user = userById.get(payment.user_id); return <tr key={payment.id} onClick={() => openPayment(payment)} className="clickable-row"><td><strong>{user?.full_name || "Unknown customer"}</strong><div className="muted">{user?.email || payment.user_id}</div></td><td><span className="payment-product-title">{(payment.payment_items || []).map((item) => item.title).join(", ") || getPaymentProduct(payment)?.title || "Unknown item"}</span><div className="muted">{payment.payment_items?.length || 1} item(s)</div></td><td>{formatCurrency(payment.amount)}</td><td>{payment.reference_number}</td><td><span className={`status ${payment.status}`}>{formatPaymentStatus(payment.status)}</span></td><td>{formatDate(payment.created_at)}</td></tr>; })}
           </tbody></table></div>
