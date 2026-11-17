@@ -2288,7 +2288,7 @@ function UsersPage({ canManageUsers }) {
                       </span>
                     </td>
                     <td>
-                      <span className={`status ${user.device_bound ? "active" : "unverified"}`}>
+                      <span className={`status user-device-status ${user.device_bound ? "active" : "unverified"}`}>
                         {user.device_bound ? "Linked" : "Not linked"}
                       </span>
                     </td>
