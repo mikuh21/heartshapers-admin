@@ -223,6 +223,33 @@ async function loadAdminLogs() {
   return listAdminAuditLogs();
 }
 
+function parseAdminLogDate(value) {
+  if (!value) return null;
+  if (value instanceof Date) return Number.isNaN(value.getTime()) ? null : value;
+  if (typeof value?.toDate === "function") {
+    const date = value.toDate();
+    return date instanceof Date && !Number.isNaN(date.getTime()) ? date : null;
+  }
+  if (typeof value === "number" || typeof value === "string") {
+    const date = new Date(value);
+    return Number.isNaN(date.getTime()) ? null : date;
+  }
+  if (typeof value === "object") {
+    const seconds = value.seconds ?? value._seconds;
+    const nanoseconds = value.nanoseconds ?? value._nanoseconds ?? 0;
+    if (Number.isFinite(Number(seconds))) {
+      const date = new Date(Number(seconds) * 1000 + Number(nanoseconds) / 1e6);
+      return Number.isNaN(date.getTime()) ? null : date;
+    }
+  }
+  return null;
+}
+
+function formatAdminLogDate(value) {
+  const date = parseAdminLogDate(value);
+  return date ? date.toLocaleString() : "Date unavailable";
+}
+
 function formatAdminLogAction(action = "") {
   return String(action)
     .split("_")
@@ -237,7 +264,7 @@ function getAdminLogSection(action = "") {
   if (value.startsWith("book_")) return "Books";
   if (value.startsWith("game_")) return "Games";
   if (value.startsWith("user_")) return "Users";
-  if (/^(administrator_|admin_(created|updated|disabled|enabled|account_|name_|email_))/.test(value)) return "Admins";
+  if (/^(administrator_|admin_(created|updated|disabled|enabled|account_|name_|email_))/.test(value) || value.startsWith("admin_")) return "Admins";
   if (value.startsWith("payment_") && !value.startsWith("payment_settings_") && !value.startsWith("payment_qr_")) return "Payments";
   if (value.startsWith("payment_settings_") || value.startsWith("payment_qr_") || value.startsWith("upload_settings_") || value.startsWith("pillar_") || value.startsWith("category_")) return "Settings";
   return "Other";
@@ -4055,8 +4082,8 @@ function SettingsPage() {
           const cutoff = adminLogsDateRange === "today" ? startOfToday : rangeDays ? now.getTime() - rangeDays * 86400000 : 0;
           const normalizedSearch = adminLogsSearch.trim().toLowerCase();
           const filteredLogs = adminLogs.filter((log) => {
-            const date = log.created_at?.toDate ? log.created_at.toDate() : new Date(log.created_at);
-            const timestamp = date instanceof Date && !Number.isNaN(date.getTime()) ? date.getTime() : 0;
+            const date = parseAdminLogDate(log.created_at);
+            const timestamp = date ? date.getTime() : 0;
             if (adminLogsCategory !== "all" && getAdminLogSection(log.action) !== adminLogsCategory) return false;
             if (cutoff && (!timestamp || timestamp < cutoff || (adminLogsDateRange === "today" && timestamp > now.getTime()))) return false;
             if (normalizedSearch) {
@@ -4076,7 +4103,7 @@ function SettingsPage() {
                   <div key={log.id} className="log-item">
                     <div className="log-main-row">
                       <strong>{formatAdminLogAction(log.action)}</strong>
-                      <span>{new Date(log.created_at?.toDate ? log.created_at.toDate() : log.created_at).toLocaleString()}</span>
+                      <span>{formatAdminLogDate(log.created_at)}</span>
                     </div>
                     <div className="log-meta">
                       <span>{log.admin_email || "Unknown admin"}</span>
