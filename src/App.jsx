@@ -340,6 +340,10 @@ function formatAdminLogDetails(log) {
   }
   if (pillarName) lines.push(`Pillar: ${pillarName}`);
   if (categoryName) lines.push(`Category: ${categoryName}`);
+  if (details.previous_status) lines.push(`Previous status: ${details.previous_status}`);
+  if (details.new_status) lines.push(`New status: ${details.new_status}`);
+  if (details.requested_status) lines.push(`Requested status: ${details.requested_status}`);
+  if (details.failure_code) lines.push(`Failure: ${details.failure_code}`);
   if (details.previous_name) lines.push(`Previous name: ${details.previous_name}`);
   if (details.new_name) lines.push(`New name: ${details.new_name}`);
   if (details.previous_email) lines.push(`Previous email: ${details.previous_email}`);
