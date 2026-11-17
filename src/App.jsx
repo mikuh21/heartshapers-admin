@@ -760,6 +760,7 @@ function ConfirmingButton({ onConfirm, title = "Confirm Save", message = "Are yo
 
 function AdminApp({ session }) {
   const [page, setPage] = useState("dashboard");
+  const [dashboardAdminName, setDashboardAdminName] = useState(session.user.displayName || session.user.user_metadata?.full_name || session.user.email?.split("@")[0] || "Admin");
   const [mobileOpen, setMobileOpen] = useState(false);
   const [logoutConfirmationOpen, setLogoutConfirmationOpen] = useState(false);
   const canManageUsers = isAdminUser(session.user);
@@ -885,7 +886,7 @@ function AdminApp({ session }) {
         </header>
 
         <div className="content">
-          {page === "dashboard" && <Dashboard adminName={session.user.displayName || session.user.user_metadata?.full_name || session.user.email?.split("@")[0] || "Admin"} goBooks={() => setPage("books")} goToPage={setPage} />}
+          {page === "dashboard" && <Dashboard adminName={dashboardAdminName} goBooks={() => setPage("books")} goToPage={setPage} />}
           {page === "books" && <Books />}
           {page === "games" && (
             <Suspense fallback={<p className="field-hint">Loading game management...</p>}>
@@ -894,7 +895,9 @@ function AdminApp({ session }) {
           )}
           {page === "users" && <UsersPage canManageUsers={canManageUsers} />}
           {page === "payments" && <PaymentsPage canManagePayments={canManageUsers} />}
-          {page === "admins" && (canManageAdmins ? <AdminsPage /> : <AccessDeniedPage message="You do not have permission to manage administrator accounts." />)}
+          {page === "admins" && (canManageAdmins ? <AdminsPage onAdminUpdated={(admin) => {
+            if (String(admin.id) === String(session.user.uid || session.user.id)) setDashboardAdminName(admin.full_name);
+          }} /> : <AccessDeniedPage message="You do not have permission to manage administrator accounts." />)}
           {page === "settings" && <SettingsPage />}
         </div>
       </main>
@@ -2510,7 +2513,7 @@ function UserDetailsModal({ user, onClose, onToggleStatus, toggling }) {
   );
 }
 
-function AdminsPage() {
+function AdminsPage({ onAdminUpdated }) {
   const { showToast } = useToast();
   const [admins, setAdmins] = useState([]);
   const [search, setSearch] = useState("");
@@ -2665,6 +2668,7 @@ function AdminsPage() {
           onUpdated={async () => {
             setAdminToEdit(null);
             await loadAdmins();
+            onAdminUpdated?.({ id: adminToEdit.id, full_name: adminToEdit.full_name });
             showToast("Administrator details updated successfully.", "success");
           }}
         />
