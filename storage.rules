@@ -76,6 +76,15 @@ service firebase.storage {
       allow delete: if hasAdminRole();
     }
 
+    // Original PDF source files for admin-managed games. These are uploaded
+    // before server-side processing and must be writable by authenticated admins.
+    match /games/{gameId}/source/{assetPath=**} {
+      allow read: if hasAdminRole();
+      allow create, update: if hasAdminRole() && validPdfUpload();
+      allow delete: if hasAdminRole();
+    }
+
+
     // QR images are customer-visible after sign-in. Admins manage assets.
     match /settings/{assetPath=**} {
       allow get: if customerSignedIn();
