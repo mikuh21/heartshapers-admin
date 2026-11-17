@@ -237,7 +237,7 @@ function getAdminLogSection(action = "") {
   if (value.startsWith("book_")) return "Books";
   if (value.startsWith("game_")) return "Games";
   if (value.startsWith("user_")) return "Users";
-  if (/^(administrator_|admin_created|admin_updated|admin_disabled|admin_enabled)/.test(value)) return "Admins";
+  if (/^(administrator_|admin_(created|updated|disabled|enabled|account_))/.test(value)) return "Admins";
   if (value.startsWith("payment_") && !value.startsWith("payment_settings_") && !value.startsWith("payment_qr_")) return "Payments";
   if (value.startsWith("payment_settings_") || value.startsWith("payment_qr_") || value.startsWith("upload_settings_") || value.startsWith("pillar_") || value.startsWith("category_")) return "Settings";
   return "Other";
