@@ -3273,6 +3273,8 @@ function SettingsPage() {
   const [uploadSettings, setUploadSettings] = useState({ ...DEFAULT_UPLOAD_SETTINGS, acceptable_file_types: [...DEFAULT_UPLOAD_SETTINGS.acceptable_file_types] });
   const [uploadSettingsLoading, setUploadSettingsLoading] = useState(true);
   const [adminLogs, setAdminLogs] = useState([]);
+  const [adminLogsLoading, setAdminLogsLoading] = useState(false);
+  const [adminLogsError, setAdminLogsError] = useState("");
   const [paymentSettings, setPaymentSettings] = useState(DEFAULT_PAYMENT_SETTINGS);
   const [paymentSettingsLoading, setPaymentSettingsLoading] = useState(true);
   const [paymentQrPreviews, setPaymentQrPreviews] = useState([]);
@@ -3281,6 +3283,8 @@ function SettingsPage() {
 
   async function refreshAdminLogs() {
     if (!adminLogsRequestRef.current) {
+      setAdminLogsLoading(true);
+      setAdminLogsError("");
       adminLogsRequestRef.current = loadAdminLogs();
     }
 
@@ -3288,8 +3292,12 @@ function SettingsPage() {
       const nextLogs = await adminLogsRequestRef.current;
       setAdminLogs(nextLogs);
       return nextLogs;
+    } catch (error) {
+      setAdminLogsError(error?.message || "Unable to load admin logs.");
+      throw error;
     } finally {
       adminLogsRequestRef.current = null;
+      setAdminLogsLoading(false);
     }
   }
 
@@ -4025,7 +4033,11 @@ function SettingsPage() {
           <h4>ADMIN LOGS</h4>
         </div>
 
-        {adminLogs.length === 0 ? (
+        {adminLogsLoading ? (
+          <div className="empty-state small-empty"><Loader2 className="spin" /> Loading admin activity...</div>
+        ) : adminLogsError ? (
+          <div className="error-box">{adminLogsError} <button className="text-btn" onClick={() => refreshAdminLogs()}>Try again</button></div>
+        ) : adminLogs.length === 0 ? (
           <div className="empty-state small-empty">No admin activity recorded yet.</div>
         ) : (
           <div className="log-list">
@@ -4033,7 +4045,7 @@ function SettingsPage() {
               <div key={log.id} className="log-item">
                 <div className="log-main-row">
                   <strong>{formatAdminLogAction(log.action)}</strong>
-                  <span>{new Date(log.created_at).toLocaleString()}</span>
+                  <span>{new Date(log.created_at?.toDate ? log.created_at.toDate() : log.created_at).toLocaleString()}</span>
                 </div>
                 <div className="log-meta">
                   <span>{log.admin_email || "Unknown admin"}</span>
