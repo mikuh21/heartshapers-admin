@@ -1014,9 +1014,6 @@ function Dashboard({ goBooks, adminName, goToPage }) {
           <h3>Welcome, {adminName}!</h3>
           <p className="muted">{today}</p>
         </div>
-        <button className="primary-btn" onClick={goBooks}>
-          <BookOpen size={18} /> Manage Books
-        </button>
       </div>
 
       <div className="stats-grid">
