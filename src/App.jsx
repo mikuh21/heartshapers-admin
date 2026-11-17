@@ -265,7 +265,7 @@ function getAdminLogSection(action = "") {
   if (value.startsWith("game_")) return "Games";
   if (value.startsWith("user_")) return "Users";
   if (/^(administrator_|admin_(created|updated|disabled|enabled|account_|name_|email_))/.test(value) || value.startsWith("admin_")) return "Admins";
-  if (value.startsWith("payment_") && !value.startsWith("payment_settings_") && !value.startsWith("payment_qr_")) return "Payments";
+  if (value.startsWith("cart_payment_") || (value.startsWith("payment_") && !value.startsWith("payment_settings_") && !value.startsWith("payment_qr_"))) return "Payments";
   if (value.startsWith("payment_settings_") || value.startsWith("payment_qr_") || value.startsWith("upload_settings_") || value.startsWith("pillar_") || value.startsWith("category_")) return "Settings";
   return "Other";
 }
