@@ -231,18 +231,16 @@ function formatAdminLogAction(action = "") {
     .join(" ");
 }
 
-function getAdminLogSection(action) {
-  if (/^(admin_login|admin_logout|admin_login_access_denied|password_reset|unauthorized_admin_action)/.test(action)) {
-    return "Authentication";
-  }
-  if (action.startsWith("book_")) return "Books";
-  if (action.startsWith("user_")) return "Users";
-  if (action.startsWith("administrator_")) return "Admins";
-  if (action.startsWith("payment_settings_") || action.startsWith("payment_qr_")) return "Payment Settings";
-  if (action.startsWith("upload_settings_")) return "Upload Settings";
-  if (action.startsWith("payment_")) return "Payments";
-  if (action.startsWith("pillar_") || action.startsWith("category_")) return "General Settings";
-  return "Administration";
+function getAdminLogSection(action = "") {
+  const value = String(action).toLowerCase();
+  if (/^(admin_login|admin_logout|admin_login_access_denied|password_reset|unauthorized_admin_action)/.test(value)) return "Authentication";
+  if (value.startsWith("book_")) return "Books";
+  if (value.startsWith("game_")) return "Games";
+  if (value.startsWith("user_")) return "Users";
+  if (/^(administrator_|admin_created|admin_updated|admin_disabled|admin_enabled)/.test(value)) return "Admins";
+  if (value.startsWith("payment_") && !value.startsWith("payment_settings_") && !value.startsWith("payment_qr_")) return "Payments";
+  if (value.startsWith("payment_settings_") || value.startsWith("payment_qr_") || value.startsWith("upload_settings_") || value.startsWith("pillar_") || value.startsWith("category_")) return "Settings";
+  return "Other";
 }
 
 function formatAdminLogDetails(log) {
@@ -3275,6 +3273,10 @@ function SettingsPage() {
   const [adminLogs, setAdminLogs] = useState([]);
   const [adminLogsLoading, setAdminLogsLoading] = useState(false);
   const [adminLogsError, setAdminLogsError] = useState("");
+  const [adminLogsSearch, setAdminLogsSearch] = useState("");
+  const [adminLogsCategory, setAdminLogsCategory] = useState("all");
+  const [adminLogsDateRange, setAdminLogsDateRange] = useState("all");
+  const [adminLogsVisibleCount, setAdminLogsVisibleCount] = useState(25);
   const [paymentSettings, setPaymentSettings] = useState(DEFAULT_PAYMENT_SETTINGS);
   const [paymentSettingsLoading, setPaymentSettingsLoading] = useState(true);
   const [paymentQrPreviews, setPaymentQrPreviews] = useState([]);
@@ -4033,28 +4035,56 @@ function SettingsPage() {
           <h4>ADMIN LOGS</h4>
         </div>
 
+        <div className="admin-logs-filters">
+          <div className="search-box admin-logs-search"><Search size={18} /><input value={adminLogsSearch} onChange={(event) => { setAdminLogsSearch(event.target.value); setAdminLogsVisibleCount(25); }} placeholder="Search admin logs..." aria-label="Search admin logs" /></div>
+          <div className="select-box"><select value={adminLogsCategory} onChange={(event) => { setAdminLogsCategory(event.target.value); setAdminLogsVisibleCount(25); }} aria-label="Filter logs by activity"><option value="all">All activities</option><option value="Books">Books</option><option value="Games">Games</option><option value="Users">Users</option><option value="Admins">Admins</option><option value="Payments">Payments</option><option value="Settings">Settings</option><option value="Authentication">Authentication</option><option value="Other">Other</option></select><ChevronDown size={16} /></div>
+          <div className="select-box"><select value={adminLogsDateRange} onChange={(event) => { setAdminLogsDateRange(event.target.value); setAdminLogsVisibleCount(25); }} aria-label="Filter logs by date"><option value="all">All time</option><option value="today">Today</option><option value="7">Last 7 days</option><option value="30">Last 30 days</option><option value="90">Last 90 days</option></select><ChevronDown size={16} /></div>
+        </div>
         {adminLogsLoading ? (
           <div className="empty-state small-empty"><Loader2 className="spin" /> Loading admin activity...</div>
         ) : adminLogsError ? (
           <div className="error-box">{adminLogsError} <button className="text-btn" onClick={() => refreshAdminLogs()}>Try again</button></div>
-        ) : adminLogs.length === 0 ? (
-          <div className="empty-state small-empty">No admin activity recorded yet.</div>
-        ) : (
-          <div className="log-list">
-            {adminLogs.map((log) => (
-              <div key={log.id} className="log-item">
-                <div className="log-main-row">
-                  <strong>{formatAdminLogAction(log.action)}</strong>
-                  <span>{new Date(log.created_at?.toDate ? log.created_at.toDate() : log.created_at).toLocaleString()}</span>
-                </div>
-                <div className="log-meta">
-                  <span>{log.admin_email || "Unknown admin"}</span>
-                  {formatAdminLogDetails(log).map((detail) => <span key={detail}>{detail}</span>)}
-                </div>
+        ) : (() => {
+          const now = new Date();
+          const startOfToday = new Date(now.getFullYear(), now.getMonth(), now.getDate()).getTime();
+          const rangeDays = adminLogsDateRange === "today" ? 0 : Number(adminLogsDateRange);
+          const cutoff = adminLogsDateRange === "today" ? startOfToday : rangeDays ? now.getTime() - rangeDays * 86400000 : 0;
+          const normalizedSearch = adminLogsSearch.trim().toLowerCase();
+          const filteredLogs = adminLogs.filter((log) => {
+            const date = log.created_at?.toDate ? log.created_at.toDate() : new Date(log.created_at);
+            const timestamp = date instanceof Date && !Number.isNaN(date.getTime()) ? date.getTime() : 0;
+            if (adminLogsCategory !== "all" && getAdminLogSection(log.action) !== adminLogsCategory) return false;
+            if (cutoff && (!timestamp || timestamp < cutoff || (adminLogsDateRange === "today" && timestamp > now.getTime()))) return false;
+            if (normalizedSearch) {
+              const searchable = [log.admin_email, formatAdminLogAction(log.action), ...formatAdminLogDetails(log), JSON.stringify(log.details || {})].join(" ").toLowerCase();
+              if (!searchable.includes(normalizedSearch)) return false;
+            }
+            return true;
+          });
+          const visibleLogs = filteredLogs.slice(0, adminLogsVisibleCount);
+          return filteredLogs.length === 0 ? (
+            <div className="empty-state small-empty">{adminLogs.length === 0 ? "No admin activity recorded yet." : "No logs match your filters."}</div>
+          ) : (
+            <>
+              <div className="admin-logs-summary"><span>Showing {visibleLogs.length} of {filteredLogs.length} matching activities</span></div>
+              <div className="log-list">
+                {visibleLogs.map((log) => (
+                  <div key={log.id} className="log-item">
+                    <div className="log-main-row">
+                      <strong>{formatAdminLogAction(log.action)}</strong>
+                      <span>{new Date(log.created_at?.toDate ? log.created_at.toDate() : log.created_at).toLocaleString()}</span>
+                    </div>
+                    <div className="log-meta">
+                      <span>{log.admin_email || "Unknown admin"}</span>
+                      {formatAdminLogDetails(log).map((detail) => <span key={detail}>{detail}</span>)}
+                    </div>
+                  </div>
+                ))}
               </div>
-            ))}
-          </div>
-        )}
+              {visibleLogs.length < filteredLogs.length && <div className="admin-logs-load-more"><button className="secondary-btn" onClick={() => setAdminLogsVisibleCount((count) => count + 25)}>Load More</button></div>}
+            </>
+          );
+        })()}
       </div>
       </div>
 
