@@ -2699,7 +2699,7 @@ function EditAdminModal({ admin, onClose, onUpdated }) {
     if (!form.full_name.trim()) nextErrors.full_name = "Full Name is required.";
     const email = form.email.trim().toLowerCase();
     if (!email) nextErrors.email = "Email is required.";
-    else if (!/^[^\\s@]+@[^\\s@]+\\.[^\\s@]+$/.test(email)) nextErrors.email = "Enter a valid email address.";
+    else if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) nextErrors.email = "Enter a valid email address.";
     setErrors(nextErrors);
     if (Object.keys(nextErrors).length) return;
 
