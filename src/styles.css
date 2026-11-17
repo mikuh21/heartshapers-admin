@@ -835,6 +835,33 @@ td { padding: 13px 17px; border-top: 1px solid #eef0f3; font-size: 13px; }
 .small-empty {
   min-height: 120px; display: flex; align-items: center; justify-content: center; color: #8a93a3; font-size: 13px;
 }
+.admin-logs-filters {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 10px;
+  margin: 16px 0 18px;
+}
+.admin-logs-search { width: min(360px, 100%); }
+.admin-logs-filters .select-box select { min-width: 170px; }
+.admin-logs-summary {
+  display: flex;
+  justify-content: flex-end;
+  margin: 0 0 10px;
+  color: #7a8494;
+  font-size: 12px;
+}
+.admin-logs-load-more {
+  display: flex;
+  justify-content: center;
+  padding: 18px 0 4px;
+}
+@media (max-width: 720px) {
+  .admin-logs-filters { align-items: stretch; flex-direction: column; }
+  .admin-logs-search, .admin-logs-filters .select-box, .admin-logs-filters .select-box select { width: 100%; }
+  .admin-logs-summary { justify-content: flex-start; }
+}
+
 .log-list {
   display: grid; gap: 10px;
 }
