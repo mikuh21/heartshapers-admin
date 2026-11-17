@@ -198,6 +198,12 @@ export async function createAdmin({ full_name, email, password }) {
   return normalizeUser(data.admin);
 }
 
+export async function updateAdminDetails({ userId, full_name, email }) {
+  const data = await callUserManagement("updateManagedAdminDetails", { userId, full_name, email });
+  if (!data?.admin) throw new Error("Unable to update this administrator account right now.");
+  return normalizeUser(data.admin);
+}
+
 export async function updateAdminStatus(userId, disabled) {
   const data = await callUserManagement("updateManagedAdminStatus", { userId, disabled });
   if (!data?.admin) throw new Error("Unable to update this administrator account right now.");
