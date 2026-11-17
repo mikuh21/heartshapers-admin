@@ -884,7 +884,7 @@ function AdminApp({ session }) {
         </header>
 
         <div className="content">
-          {page === "dashboard" && <Dashboard goBooks={() => setPage("books")} />}
+          {page === "dashboard" && <Dashboard adminName={session.user.displayName || session.user.user_metadata?.full_name || session.user.email?.split("@")[0] || "Admin"} goBooks={() => setPage("books")} />}
           {page === "books" && <Books />}
           {page === "games" && (
             <Suspense fallback={<p className="field-hint">Loading game management...</p>}>
@@ -926,7 +926,13 @@ function NavItem({ icon, label, active, onClick }) {
   );
 }
 
-function Dashboard({ goBooks }) {
+function Dashboard({ goBooks, adminName }) {
+  const today = new Date().toLocaleDateString("en-US", {
+    month: "long",
+    day: "numeric",
+    year: "numeric",
+    weekday: "long"
+  });
   const [stats, setStats] = useState({
     total: 0,
     totalGames: 0,
@@ -968,8 +974,8 @@ function Dashboard({ goBooks }) {
     <>
       <div className="welcome-row">
         <div>
-          <h3>Overview</h3>
-          <p className="muted">A simple overview of your Heartshapers books.</p>
+          <h3>Welcome, {adminName}!</h3>
+          <p className="muted">{today}</p>
         </div>
         <button className="primary-btn" onClick={goBooks}>
           <BookOpen size={18} /> Manage Books
