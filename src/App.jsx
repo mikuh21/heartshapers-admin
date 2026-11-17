@@ -884,7 +884,7 @@ function AdminApp({ session }) {
         </header>
 
         <div className="content">
-          {page === "dashboard" && <Dashboard adminName={session.user.displayName || session.user.user_metadata?.full_name || session.user.email?.split("@")[0] || "Admin"} goBooks={() => setPage("books")} />}
+          {page === "dashboard" && <Dashboard adminName={session.user.displayName || session.user.user_metadata?.full_name || session.user.email?.split("@")[0] || "Admin"} goBooks={() => setPage("books")} goToPage={setPage} />}
           {page === "books" && <Books />}
           {page === "games" && (
             <Suspense fallback={<p className="field-hint">Loading game management...</p>}>
@@ -926,7 +926,7 @@ function NavItem({ icon, label, active, onClick }) {
   );
 }
 
-function Dashboard({ goBooks, adminName }) {
+function Dashboard({ goBooks, adminName, goToPage }) {
   const today = new Date().toLocaleDateString("en-US", {
     month: "long",
     day: "numeric",
@@ -989,13 +989,41 @@ function Dashboard({ goBooks, adminName }) {
         <StatCard label="Free Books" value={stats.free} icon={<Unlock size={21} />} loading={loading} />
       </div>
 
-      <div className="info-card">
-        <div className="info-icon"><BookOpen size={22} /></div>
-        <div>
-          <h4>Book management</h4>
-          <p>Add, edit, upload, and remove books from one simple page.</p>
+      <section className="quick-actions-section" aria-labelledby="quick-actions-title">
+        <div className="quick-actions-heading">
+          <div>
+            <h4 id="quick-actions-title">Quick Actions</h4>
+            <p className="muted">Jump straight to the tasks you manage most.</p>
+          </div>
         </div>
-      </div>
+        <div className="quick-actions-grid">
+          <button type="button" className="quick-action-card" onClick={goBooks}>
+            <span className="quick-action-icon"><BookOpen size={20} /></span>
+            <span className="quick-action-copy"><strong>Manage Books</strong><small>Add, edit, and organize books</small></span>
+            <span className="quick-action-arrow">→</span>
+          </button>
+          <button type="button" className="quick-action-card" onClick={() => goToPage("games")}>
+            <span className="quick-action-icon"><Gamepad2 size={20} /></span>
+            <span className="quick-action-copy"><strong>Manage Games</strong><small>Update games and learning content</small></span>
+            <span className="quick-action-arrow">→</span>
+          </button>
+          <button type="button" className="quick-action-card" onClick={() => goToPage("payments")}>
+            <span className="quick-action-icon"><Receipt size={20} /></span>
+            <span className="quick-action-copy"><strong>Review Payments</strong><small>Verify or reject submissions</small></span>
+            <span className="quick-action-arrow">→</span>
+          </button>
+          <button type="button" className="quick-action-card" onClick={() => goToPage("users")}>
+            <span className="quick-action-icon"><Users size={20} /></span>
+            <span className="quick-action-copy"><strong>Manage Users</strong><small>View accounts and membership</small></span>
+            <span className="quick-action-arrow">→</span>
+          </button>
+          <button type="button" className="quick-action-card" onClick={() => goToPage("settings")}>
+            <span className="quick-action-icon"><Settings size={20} /></span>
+            <span className="quick-action-copy"><strong>Settings</strong><small>Configure app and payment settings</small></span>
+            <span className="quick-action-arrow">→</span>
+          </button>
+        </div>
+      </section>
     </>
   );
 }
