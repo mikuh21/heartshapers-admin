@@ -65,6 +65,7 @@ import {
   updateBookUserAccess,
   createUser,
   createAdmin,
+  updateAdminDetails,
   updateAdminStatus,
   updateUserStatus,
   resetUserDevice
