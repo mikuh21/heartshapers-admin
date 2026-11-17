@@ -305,7 +305,7 @@ exports.updateManagedAdminDetails = onCall({ region: REGION }, async (request) =
   const normalizedEmail = String(email || "").trim().toLowerCase();
   if (!uid) throw new HttpsError("invalid-argument", "Administrator account is required.");
   if (!name) throw new HttpsError("invalid-argument", "Full name is required.");
-  if (!/^[^\\s@]+@[^\\s@]+\\.[^\\s@]+$/.test(normalizedEmail)) {
+  if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(normalizedEmail)) {
     throw new HttpsError("invalid-argument", "Please enter a valid email address.");
   }
   const auth = getAuth();
