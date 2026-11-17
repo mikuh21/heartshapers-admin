@@ -254,14 +254,40 @@ exports.updateManagedUserStatus = onCall({ region: REGION }, async (request) => 
   requireAdmin(request);
   const { userId, disabled } = request.data || {};
   if (!userId || typeof disabled !== "boolean") throw new HttpsError("invalid-argument", "Invalid user status.");
-  const target = await getAuth().getUser(String(userId));
+  const uid = String(userId);
+  const target = await getAuth().getUser(uid);
   if (["admin", "super_admin"].includes(String(target.customClaims?.role || "").toLowerCase())) {
     throw new HttpsError("failed-precondition", "Administrator accounts must be managed separately.");
   }
-  await getAuth().updateUser(String(userId), { disabled });
-  if (disabled) await getAuth().revokeRefreshTokens(String(userId));
-  await db.collection("users").doc(String(userId)).set({ disabled, updated_at: FieldValue.serverTimestamp() }, { merge: true });
-  return { user: publicUser({ ...target, disabled }) };
+  const previousDisabled = Boolean(target.disabled);
+  try {
+    await getAuth().updateUser(uid, { disabled });
+    if (disabled) await getAuth().revokeRefreshTokens(uid);
+    await db.collection("users").doc(uid).set({ disabled, updated_at: FieldValue.serverTimestamp() }, { merge: true });
+    if (previousDisabled !== disabled) {
+      await db.collection("admin_logs").add({
+        action: disabled ? "user_disabled" : "user_enabled",
+        admin_email: request.auth.token.email || null,
+        details: {
+          target_type: "user", target_id: uid,
+          target_name: target.displayName || target.email || "Unnamed user",
+          user_email: target.email || null,
+          previous_status: previousDisabled ? "disabled" : "active",
+          new_status: disabled ? "disabled" : "active"
+        },
+        created_at: FieldValue.serverTimestamp()
+      });
+    }
+    return { user: publicUser({ ...target, disabled }) };
+  } catch (error) {
+    await db.collection("admin_logs").add({
+      action: "user_status_update_failed",
+      admin_email: request.auth.token.email || null,
+      details: { target_type: "user", target_id: uid, target_name: target.displayName || target.email || "Unnamed user", user_email: target.email || null, requested_status: disabled ? "disabled" : "active", failure_code: error.code || error.name || "USER_STATUS_UPDATE_FAILED" },
+      created_at: FieldValue.serverTimestamp()
+    }).catch((logError) => console.error("Unable to record failed user status update.", logError));
+    throw error;
+  }
 });
 
 exports.listManagedAdmins = onCall({ region: REGION }, async (request) => {
@@ -378,14 +404,41 @@ exports.updateManagedAdminStatus = onCall({ region: REGION }, async (request) =>
   requireAdmin(request, true);
   const { userId, disabled } = request.data || {};
   if (!userId || typeof disabled !== "boolean") throw new HttpsError("invalid-argument", "Invalid administrator status.");
-  if (String(userId) === request.auth.uid) throw new HttpsError("failed-precondition", "You cannot disable your own administrator account.");
-  const target = await getAuth().getUser(String(userId));
+  const uid = String(userId);
+  if (uid === request.auth.uid) throw new HttpsError("failed-precondition", "You cannot disable your own administrator account.");
+  const target = await getAuth().getUser(uid);
   if (!["admin", "super_admin"].includes(String(target.customClaims?.role || "").toLowerCase())) {
     throw new HttpsError("failed-precondition", "The selected account is not an administrator.");
   }
-  await getAuth().updateUser(String(userId), { disabled });
-  await db.collection("users").doc(String(userId)).set({ disabled, updated_at: FieldValue.serverTimestamp() }, { merge: true });
-  return { admin: publicUser({ ...target, disabled }) };
+  const previousDisabled = Boolean(target.disabled);
+  try {
+    await getAuth().updateUser(uid, { disabled });
+    await db.collection("users").doc(uid).set({ disabled, updated_at: FieldValue.serverTimestamp() }, { merge: true });
+    if (previousDisabled !== disabled) {
+      await db.collection("admin_logs").add({
+        action: disabled ? "admin_disabled" : "admin_enabled",
+        admin_email: request.auth.token.email || null,
+        details: {
+          target_type: "admin", target_id: uid,
+          target_name: target.displayName || target.email || "Unnamed admin",
+          admin_name: target.displayName || target.email || "Unnamed admin",
+          admin_email: target.email || null,
+          previous_status: previousDisabled ? "disabled" : "active",
+          new_status: disabled ? "disabled" : "active"
+        },
+        created_at: FieldValue.serverTimestamp()
+      });
+    }
+    return { admin: publicUser({ ...target, disabled }) };
+  } catch (error) {
+    await db.collection("admin_logs").add({
+      action: "admin_status_update_failed",
+      admin_email: request.auth.token.email || null,
+      details: { target_type: "admin", target_id: uid, target_name: target.displayName || target.email || "Unnamed admin", admin_email: target.email || null, requested_status: disabled ? "disabled" : "active", failure_code: error.code || error.name || "ADMIN_STATUS_UPDATE_FAILED" },
+      created_at: FieldValue.serverTimestamp()
+    }).catch((logError) => console.error("Unable to record failed admin status update.", logError));
+    throw error;
+  }
 });
 
 
