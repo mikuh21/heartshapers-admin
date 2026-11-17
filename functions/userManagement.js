@@ -287,6 +287,18 @@ exports.createManagedAdmin = onCall({ region: REGION, secrets: MAIL_SECRETS }, a
       uid: user.uid, email: normalizedEmail, full_name: name, role: "admin",
       email_verified: false, disabled: false, created_at: FieldValue.serverTimestamp(), updated_at: FieldValue.serverTimestamp()
     }, { merge: true });
+    await db.collection("admin_logs").add({
+      action: "admin_created",
+      admin_email: request.auth.token.email || null,
+      details: {
+        target_type: "admin",
+        target_id: user.uid,
+        target_name: name,
+        admin_name: name,
+        admin_email: normalizedEmail
+      },
+      created_at: FieldValue.serverTimestamp()
+    });
     let emailSent = false;
     try { await sendVerificationEmail({ ...user, displayName: name }); emailSent = true; }
     catch (mailError) { console.error("Administrator verification email delivery failed.", { uid: user.uid, code: mailError.code || mailError.name || "MAIL_FAILED" }); }
@@ -314,11 +326,43 @@ exports.updateManagedAdminDetails = onCall({ region: REGION }, async (request) =
     throw new HttpsError("failed-precondition", "The selected account is not an administrator.");
   }
   try {
+    const previousName = String(target.displayName || target.customClaims?.full_name || "").trim();
+    const previousEmail = String(target.email || "").trim().toLowerCase();
+    const nameChanged = previousName !== name;
+    const emailChanged = previousEmail !== normalizedEmail;
+
     await auth.updateUser(uid, { displayName: name, email: normalizedEmail });
     await auth.setCustomUserClaims(uid, { ...(target.customClaims || {}), full_name: name });
     await db.collection("users").doc(uid).set({
       uid, full_name: name, email: normalizedEmail, updated_at: FieldValue.serverTimestamp()
     }, { merge: true });
+
+    const auditBase = {
+      admin_email: request.auth.token.email || null,
+      created_at: FieldValue.serverTimestamp()
+    };
+    if (nameChanged) {
+      await db.collection("admin_logs").add({
+        ...auditBase,
+        action: "admin_name_updated",
+        details: {
+          target_type: "admin", target_id: uid, target_name: name,
+          previous_name: previousName || "Unnamed admin", new_name: name,
+          admin_name: name, admin_email: normalizedEmail
+        }
+      });
+    }
+    if (emailChanged) {
+      await db.collection("admin_logs").add({
+        ...auditBase,
+        action: "admin_email_updated",
+        details: {
+          target_type: "admin", target_id: uid, target_name: name,
+          previous_email: previousEmail, new_email: normalizedEmail,
+          admin_name: name, admin_email: normalizedEmail
+        }
+      });
+    }
     const updated = await auth.getUser(uid);
     return { admin: publicUser({ ...updated, customClaims: { ...(updated.customClaims || {}), full_name: name } }) };
   } catch (error) {
