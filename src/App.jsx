@@ -1062,7 +1062,9 @@ function Books() {
   const availablePillars = managedSettings.pillars.map((item) => item.name);
   const availableSubcategories = pillar === "All Pillars"
     ? []
-    : (managedSettings.pillars.find((item) => item.name === pillar)?.categories || []).map((category) => category.name);
+    : (managedSettings.pillars.find((item) => item.name === pillar)?.categories || [])
+        .map((category) => category.name)
+        .filter((name) => normalizeFilterValue(name) !== "games");
 
   const filtered = books.filter((book) => {
     const text = `${book.title || ""} ${book.subcategory || ""} ${book.pillar || ""}`.toLowerCase();
