@@ -2137,6 +2137,7 @@ function UsersPage({ canManageUsers }) {
   const [actionLoadingId, setActionLoadingId] = useState(null);
   const [selectedUser, setSelectedUser] = useState(null);
   const [userToToggle, setUserToToggle] = useState(null);
+  const [userToResetDevice, setUserToResetDevice] = useState(null);
   const [modalOpen, setModalOpen] = useState(false);
 
   async function loadUsers() {
@@ -2188,15 +2189,16 @@ function UsersPage({ canManageUsers }) {
   }
 
   async function handleDeviceReset(user) {
-    if (!window.confirm(`Reset the mobile device linked to ${user.email || "this user"}? Their current phone will be signed out and the next phone used to sign in will become the linked device.`)) return;
     setActionLoadingId(user.id);
     try {
       const updatedUser = await resetUserDevice(user.id);
       setUsers((current) => current.map((item) => item.id === user.id ? { ...item, ...updatedUser, device_bound: false } : item));
       setSelectedUser((currentUser) => currentUser?.id === user.id ? { ...currentUser, ...updatedUser, device_bound: false } : currentUser);
       showToast("Mobile device link reset. The next phone to sign in will be linked.", "success");
+      return true;
     } catch (err) {
       setError(err.message || "Unable to reset this user's mobile device link.");
+      return false;
     } finally {
       setActionLoadingId(null);
     }
@@ -2314,7 +2316,7 @@ function UsersPage({ canManageUsers }) {
                         </button>
                         {user.device_bound && <button
                           className="secondary-btn small"
-                          onClick={() => handleDeviceReset(user)}
+                          onClick={() => setUserToResetDevice(user)}
                           disabled={actionLoadingId === user.id}
                         >
                           {actionLoadingId === user.id ? <Loader2 size={16} className="spin" /> : "Reset device"}
@@ -2345,6 +2347,22 @@ function UsersPage({ canManageUsers }) {
           onClose={() => setSelectedUser(null)}
           onToggleStatus={() => setUserToToggle(selectedUser)}
           toggling={actionLoadingId === selectedUser.id}
+        />
+      )}
+      {userToResetDevice && (
+        <ConfirmModal
+          title="Reset Mobile Device?"
+          message={`Are you sure you want to reset the mobile device linked to "${userToResetDevice.email || userToResetDevice.full_name || "this user"}"?`}
+          secondaryMessage="Their current phone will be signed out, and the next phone used to sign in will become the linked device."
+          actionLabel="Reset Device"
+          busyLabel="Resetting..."
+          tone="danger"
+          onClose={() => setUserToResetDevice(null)}
+          onConfirm={async () => {
+            const succeeded = await handleDeviceReset(userToResetDevice);
+            if (succeeded) setUserToResetDevice(null);
+            return succeeded;
+          }}
         />
       )}
       {userToToggle && (
