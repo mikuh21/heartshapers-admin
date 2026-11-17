@@ -3099,6 +3099,9 @@ function PaymentsPage({ canManagePayments }) {
   const [selected, setSelected] = useState(null);
   const [showVerifyConfirmation, setShowVerifyConfirmation] = useState(false);
   const [proofUrl, setProofUrl] = useState("");
+  const [proofLoading, setProofLoading] = useState(false);
+  const [proofError, setProofError] = useState("");
+  const proofRequestSequence = useRef(0);
   const [note, setNote] = useState("");
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
@@ -3179,24 +3182,36 @@ function PaymentsPage({ canManagePayments }) {
   }
 
   async function openPayment(payment) {
+    const requestId = ++proofRequestSequence.current;
     setSelected(payment);
     setNote(payment.admin_notes || "");
     setProofUrl("");
-    await logAdminAction({
+    setProofError("");
+    setProofLoading(true);
+
+    // Record the view independently so audit logging never delays the proof image.
+    logAdminAction({
       action: "cart_payment_transaction_viewed",
       targetType: "payment_transaction",
       targetId: payment.id,
       targetName: payment.payment_items?.map((item) => item.title).join(", ") || getPaymentProduct(payment)?.title || null,
       details: { customer_id: payment.user_id, amount: payment.amount, item_count: payment.payment_items?.length || 1 }
-    });
+    }).catch((auditError) => console.error("Unable to record payment view activity.", auditError));
+
     try {
-      const proofLocation = String(payment.proof_image_url || "");
-      const url = proofLocation.startsWith("http")
+      const proofLocation = String(payment.proof_image_url || "").trim();
+      if (!proofLocation) throw new Error("Payment proof location is missing.");
+      const url = /^https?:\\/\\//i.test(proofLocation)
         ? proofLocation
         : await getDownloadURL(firebaseStorageRef(firebaseStorage, proofLocation));
+      if (requestId !== proofRequestSequence.current) return;
       setProofUrl(url);
-    } catch (signedUrlError) {
-      console.error("Unable to resolve Firebase payment proof.", signedUrlError);
+    } catch (proofLoadError) {
+      if (requestId !== proofRequestSequence.current) return;
+      console.error("Unable to resolve Firebase payment proof.", proofLoadError);
+      setProofError("Unable to load payment proof. Please try opening this submission again.");
+    } finally {
+      if (requestId === proofRequestSequence.current) setProofLoading(false);
     }
   }
 
@@ -3282,7 +3297,7 @@ function PaymentsPage({ canManagePayments }) {
         )}
       </div>
       {selected && <div className="modal-backdrop"><div className="modal payment-modal"><div className="modal-header"><div><h3>Payment Review</h3><p className="muted">{formatPaymentStatus(selected.status)} submission</p></div><button className="icon-btn" onClick={() => { setSelected(null); setShowVerifyConfirmation(false); }}><X size={20} /></button></div><div className="modal-body">
-        {(() => { const user = userById.get(selected.user_id); return <><section className="payment-items-section" aria-label="Purchased items"><div className="payment-items-heading"><strong>Purchased items</strong><span>{selected.payment_items?.length || 1} item(s)</span></div><div className="table-wrap payment-items-table"><table><thead><tr><th>Type</th><th>Item purchased</th><th className="payment-item-price">Price</th></tr></thead><tbody>{(selected.payment_items || []).map((item, index) => <tr key={`${item.type}:${item.id}:${index}`}><td><span className={`payment-item-type ${item.type}`}>{item.type === "game" ? "Game" : "Book"}</span></td><td className="payment-item-name">{item.title}</td><td className="payment-item-price">{formatCurrency(item.price)}</td></tr>)}</tbody><tfoot><tr><th colSpan={2}>Total paid</th><th className="payment-item-price">{formatCurrency(selected.amount)}</th></tr><tr><td colSpan={3}><div className="payment-reference-inline"><strong>Reference number:</strong><span className="payment-reference-value">{selected.reference_number}</span></div></td></tr></tfoot></table></div></section><label>Payment proof</label>{proofUrl ? <PaymentProofViewer key={selected.id} src={proofUrl} /> : <div className="empty-state small-empty">Unable to load payment proof.</div>}{selected.status === "pending" && <><label>Admin note / rejection reason</label><textarea value={note} onChange={(event) => setNote(event.target.value)} rows={3} placeholder="Optional note for verification, required for rejection" /></>}{selected.admin_notes && selected.status !== "pending" && <p className="field-hint">Admin note: {selected.admin_notes}</p>}</>; })()}
+        {(() => { const user = userById.get(selected.user_id); return <><section className="payment-items-section" aria-label="Purchased items"><div className="payment-items-heading"><strong>Purchased items</strong><span>{selected.payment_items?.length || 1} item(s)</span></div><div className="table-wrap payment-items-table"><table><thead><tr><th>Type</th><th>Item purchased</th><th className="payment-item-price">Price</th></tr></thead><tbody>{(selected.payment_items || []).map((item, index) => <tr key={`${item.type}:${item.id}:${index}`}><td><span className={`payment-item-type ${item.type}`}>{item.type === "game" ? "Game" : "Book"}</span></td><td className="payment-item-name">{item.title}</td><td className="payment-item-price">{formatCurrency(item.price)}</td></tr>)}</tbody><tfoot><tr><th colSpan={2}>Total paid</th><th className="payment-item-price">{formatCurrency(selected.amount)}</th></tr><tr><td colSpan={3}><div className="payment-reference-inline"><strong>Reference number:</strong><span className="payment-reference-value">{selected.reference_number}</span></div></td></tr></tfoot></table></div></section><label>Payment proof</label>{proofLoading ? <div className="empty-state small-empty"><Loader2 className="spin" /> Loading payment proof...</div> : proofUrl ? <PaymentProofViewer key={selected.id} src={proofUrl} /> : <div className="empty-state small-empty">{proofError || "Payment proof is not available."}</div>}{selected.status === "pending" && <><label>Admin note / rejection reason</label><textarea value={note} onChange={(event) => setNote(event.target.value)} rows={3} placeholder="Optional note for verification, required for rejection" /></>}{selected.admin_notes && selected.status !== "pending" && <p className="field-hint">Admin note: {selected.admin_notes}</p>}</>; })()}
       </div>{selected.status === "pending" && <div className="modal-footer"><button className="secondary-btn danger" onClick={() => { if (!note.trim()) { showToast("Add a rejection reason first.", "error"); return; } review("reject"); }} disabled={busy}>Reject Payment</button><button className="primary-btn" onClick={() => setShowVerifyConfirmation(true)} disabled={busy}>{busy ? "Saving..." : "Verify Payment"}</button></div>}</div></div>}
       {selected && showVerifyConfirmation && <div className="modal-backdrop payment-confirm-backdrop"><div className="modal payment-confirm-modal" role="dialog" aria-modal="true" aria-labelledby="verify-confirm-title"><div className="modal-header"><div><h3 id="verify-confirm-title">Confirm Payment Verification</h3><p className="muted">Review all items before confirming.</p></div><button className="icon-btn" onClick={() => setShowVerifyConfirmation(false)} disabled={busy}><X size={20} /></button></div><div className="modal-body"><section className="payment-items-section" aria-label="Items to approve"><div className="payment-items-heading"><strong>Items to be approved</strong><span>{selected.payment_items?.length || 1} item(s)</span></div><div className="table-wrap payment-items-table"><table><thead><tr><th>Type</th><th>Item purchased</th><th className="payment-item-price">Price</th></tr></thead><tbody>{(selected.payment_items || []).map((item, index) => <tr key={`confirm:${item.type}:${item.id}:${index}`}><td><span className={`payment-item-type ${item.type}`}>{item.type === "game" ? "Game" : "Book"}</span></td><td className="payment-item-name">{item.title}</td><td className="payment-item-price">{formatCurrency(item.price)}</td></tr>)}</tbody><tfoot><tr><th colSpan={2}>Total paid</th><th className="payment-item-price">{formatCurrency(selected.amount)}</th></tr></tfoot></table></div></section><div className="payment-verification-disclaimer"><strong>Important Notice</strong><p>Please review the list of items above and ensure that all payment details are accurate and complete. Once you confirm this action, the payment verification cannot be undone or modified. The user will be granted access to all items listed above.</p><p>Are you sure you have verified that all details are correct and wish to proceed?</p></div></div><div className="modal-footer"><button className="secondary-btn" onClick={() => setShowVerifyConfirmation(false)} disabled={busy}>Cancel</button><button className="primary-btn" onClick={() => review("verify")} disabled={busy}>{busy ? "Verifying..." : "Confirm Verification"}</button></div></div></div>}
     </>
