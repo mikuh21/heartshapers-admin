@@ -272,6 +272,7 @@ td { padding: 13px 17px; border-top: 1px solid #eef0f3; font-size: 13px; }
 .status.locked, .status.disabled { background: #fff3e8; color: #a35308; }
 .status.verified { background: #edf8f0; color: #24723c; }
 .status.unverified { background: #f3f4f6; color: #6b7280; }
+.user-device-status { justify-content: center; text-align: center; min-width: 62px; }
 .status.pending { background: #fff8e6; color: #946200; }
 .status.rejected { background: #fff1f0; color: #b42318; }
 
