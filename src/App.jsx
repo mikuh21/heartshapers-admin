@@ -237,7 +237,7 @@ function getAdminLogSection(action = "") {
   if (value.startsWith("book_")) return "Books";
   if (value.startsWith("game_")) return "Games";
   if (value.startsWith("user_")) return "Users";
-  if (/^(administrator_|admin_(created|updated|disabled|enabled|account_))/.test(value)) return "Admins";
+  if (/^(administrator_|admin_(created|updated|disabled|enabled|account_|name_|email_))/.test(value)) return "Admins";
   if (value.startsWith("payment_") && !value.startsWith("payment_settings_") && !value.startsWith("payment_qr_")) return "Payments";
   if (value.startsWith("payment_settings_") || value.startsWith("payment_qr_") || value.startsWith("upload_settings_") || value.startsWith("pillar_") || value.startsWith("category_")) return "Settings";
   return "Other";
@@ -314,6 +314,10 @@ function formatAdminLogDetails(log) {
   if (pillarName) lines.push(`Pillar: ${pillarName}`);
   if (categoryName) lines.push(`Category: ${categoryName}`);
   if (details.previous_name) lines.push(`Previous name: ${details.previous_name}`);
+  if (details.new_name) lines.push(`New name: ${details.new_name}`);
+  if (details.previous_email) lines.push(`Previous email: ${details.previous_email}`);
+  if (details.new_email) lines.push(`New email: ${details.new_email}`);
+  if (details.admin_email && details.target_name !== details.admin_email) lines.push(`Administrator email: ${details.admin_email}`);
   if (details.user_email && details.target_name !== details.user_email) lines.push(`User: ${details.user_email}`);
   if (details.admin_email && details.target_name !== details.admin_email) lines.push(`Administrator: ${details.admin_email}`);
 
